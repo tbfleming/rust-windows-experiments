@@ -3,25 +3,15 @@
 #![allow(clippy::too_many_arguments)]
 
 use std::{
-    borrow::BorrowMut,
     cell::{OnceCell, RefCell},
-    fmt::Display,
     mem::size_of,
-    ops::{Deref, DerefMut},
     pin::Pin,
     rc::{Rc, Weak},
 };
 use thiserror::Error;
 use windows::{
-    core,
-    core::PCWSTR,
-    Win32::Foundation::*,
-    Win32::Graphics::Gdi::ValidateRect,
-    Win32::UI::WindowsAndMessaging::*,
-    Win32::{
-        System::LibraryLoader::GetModuleHandleA,
-        UI::Controls::{InitCommonControlsEx, ICC_STANDARD_CLASSES, INITCOMMONCONTROLSEX},
-    },
+    core, core::PCWSTR, Win32::Foundation::*, Win32::Graphics::Gdi::ValidateRect,
+    Win32::System::LibraryLoader::GetModuleHandleA, Win32::UI::WindowsAndMessaging::*,
 };
 
 use crate::Color;
@@ -58,10 +48,10 @@ enum Callback<F> {
     Borrowed,
 }
 
-struct CallbackCell<F>(RefCell<Callback<F>>);
+struct CallbackCell<F: ?Sized>(RefCell<Callback<Box<F>>>);
 
-impl<F> CallbackCell<F> {
-    fn set(&self, f: Option<F>) {
+impl<F: ?Sized> CallbackCell<F> {
+    fn set(&self, f: Option<Box<F>>) {
         *self.0.borrow_mut() = if let Some(f) = f {
             Callback::Filled(f)
         } else {
@@ -79,24 +69,19 @@ impl<F> CallbackCell<F> {
     }
 
     fn with<G: FnOnce(&mut F) -> T, T>(&self, g: G) -> Option<T> {
-        // if let Some(f) = &mut self.borrow().1 {
-        //     Some(g(f))
-        // } else {
-        //     None
-        // }
-        self.borrow().1.as_mut().map(g)
+        self.borrow().1.as_mut().map(|f| g(f))
     }
 }
 
-impl<F> Default for CallbackCell<F> {
+impl<F: ?Sized> Default for CallbackCell<F> {
     fn default() -> Self {
         Self(RefCell::new(Callback::Empty))
     }
 }
 
-struct CallbackRef<'a, F>(&'a CallbackCell<F>, Option<F>);
+struct CallbackRef<'a, F: ?Sized>(&'a CallbackCell<F>, Option<Box<F>>);
 
-impl<'a, F> Drop for CallbackRef<'a, F> {
+impl<'a, F: ?Sized> Drop for CallbackRef<'a, F> {
     fn drop(&mut self) {
         let mut cb = self.0 .0.borrow_mut();
         if let Callback::Borrowed = *cb {
@@ -144,7 +129,7 @@ pub struct WindowImpl<'event> {
 
 #[derive(Default)]
 pub struct WindowEvents<'event> {
-    on_close: CallbackCell<Box<dyn FnMut(&Window<'event>) + 'event>>,
+    on_close: CallbackCell<dyn FnMut(&Window<'event>) + 'event>,
 }
 
 impl WindowEvents<'_> {
@@ -233,6 +218,12 @@ impl<'event> WindowImpl<'event> {
 
     fn live(&self) -> bool {
         *self.hwnd.borrow() != Default::default()
+    }
+
+    fn set_callback<F: ?Sized>(&self, cell: &CallbackCell<F>, f: Box<F>) {
+        if self.live() {
+            cell.set(Some(f));
+        }
     }
 
     /// Get raw handle. May be NULL.
@@ -367,17 +358,7 @@ impl<'event> crate::Window<'event> for Window<'event> {
         todo!()
     }
 
-    fn on_close<F: FnMut(&Self) + 'event>(
-        &self,
-        callback: Option<F>,
-    ) -> Result<&Self, Self::Error> {
-        if self.live() {
-            self.events.on_close.set(if let Some(callback) = callback {
-                Some(Box::new(callback))
-            } else {
-                None
-            });
-        }
-        Ok(self)
+    fn on_close<F: FnMut(&Self) + 'event>(&self, callback: F) {
+        self.set_callback(&self.events.on_close, Box::new(callback));
     }
 }

@@ -19,6 +19,5 @@ pub trait Window<'event>: Sized + Clone {
     fn show(&self, visible: bool) -> Result<&Self, Self::Error>;
     fn enable(&self, enabled: bool) -> Result<&Self, Self::Error>;
 
-    fn on_close<F: FnMut(&Self) + 'event>(&self, callback: Option<F>)
-        -> Result<&Self, Self::Error>;
+    fn on_close<F: FnMut(&Self) + 'event>(&self, callback: F);
 }

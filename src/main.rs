@@ -1,23 +1,10 @@
-#![allow(dead_code, unused_imports)]
-
-use std::{
-    borrow::BorrowMut,
-    cell::RefCell,
-    mem::size_of,
-    ops::{Deref, DerefMut},
-    pin::Pin,
-    rc::Rc,
-};
-
+use std::mem::size_of;
 use trywin::{comm_ctrl, Window};
-use windows::{
-    // core::*,
-    Win32::Foundation::*,
-    Win32::Graphics::Gdi::ValidateRect,
-    Win32::UI::WindowsAndMessaging::*,
-    Win32::{
-        System::LibraryLoader::GetModuleHandleA,
-        UI::Controls::{InitCommonControlsEx, ICC_STANDARD_CLASSES, INITCOMMONCONTROLSEX},
+use windows::Win32::UI::{
+    Controls::{InitCommonControlsEx, ICC_STANDARD_CLASSES, INITCOMMONCONTROLSEX},
+    WindowsAndMessaging::{
+        DispatchMessageA, GetMessageA, CS_HREDRAW, CS_VREDRAW, MSG, WS_EX_OVERLAPPEDWINDOW,
+        WS_OVERLAPPEDWINDOW, WS_VISIBLE,
     },
 };
 
@@ -39,10 +26,10 @@ fn main() -> Result<(), comm_ctrl::Error> {
             None,
             None,
         )?;
-        window.on_close(Some(|w: &trywin::comm_ctrl::Window| {
+        window.on_close(|w: &trywin::comm_ctrl::Window| {
             println!("on_close!!!");
             w.destroy().unwrap();
-        }))?;
+        });
 
         let mut message = MSG::default();
 
