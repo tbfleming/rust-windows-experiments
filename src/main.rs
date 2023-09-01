@@ -1,12 +1,15 @@
 use std::mem::size_of;
-use trywin::{comm_ctrl, Window};
-use windows::Win32::{UI::{
-    Controls::{InitCommonControlsEx, ICC_STANDARD_CLASSES, INITCOMMONCONTROLSEX},
-    WindowsAndMessaging::{
-        DispatchMessageA, GetMessageA, CS_HREDRAW, CS_VREDRAW, MSG, WS_EX_OVERLAPPEDWINDOW,
-        WS_OVERLAPPEDWINDOW, WS_VISIBLE,
+use trywin::{comm_ctrl, Color, Window};
+use windows::Win32::{
+    Foundation::HWND,
+    UI::{
+        Controls::{InitCommonControlsEx, ICC_STANDARD_CLASSES, INITCOMMONCONTROLSEX},
+        WindowsAndMessaging::{
+            DispatchMessageA, GetMessageA, MSG, WS_CLIPCHILDREN, WS_EX_CONTROLPARENT,
+            WS_EX_OVERLAPPEDWINDOW, WS_OVERLAPPEDWINDOW, WS_VISIBLE,
+        },
     },
-}, Foundation::HWND};
+};
 
 fn main() -> Result<(), comm_ctrl::Error> {
     unsafe {
@@ -16,23 +19,27 @@ fn main() -> Result<(), comm_ctrl::Error> {
         });
 
         let window = trywin::comm_ctrl::WindowImpl::new(
-            "ABCD",
-            "efgh",
-            CS_HREDRAW | CS_VREDRAW,
-            WS_OVERLAPPEDWINDOW | WS_VISIBLE,
-            WS_EX_OVERLAPPEDWINDOW,
+            WS_OVERLAPPEDWINDOW | WS_VISIBLE | WS_CLIPCHILDREN,
+            WS_EX_OVERLAPPEDWINDOW | WS_EX_CONTROLPARENT,
             HWND(0),
             None,
             None,
             None,
             None,
         )?;
+        window.text("Hello, world!")?;
         window.on_close(|w: &trywin::comm_ctrl::Window| {
             println!("on_close!!!");
             w.destroy().unwrap();
         });
+        // window.on_close(|w| {
+        //     w.background(Color(0, 127, 0, 255)).unwrap();
+        // });
 
-        // let b = window.create_child()?;
+        let b = window.create_child()?;
+        b.bounds(Some((100, 100)), Some((400, 400)))?;
+        b.background(Color(127, 0, 127, 255))?;
+
 
         let mut message = MSG::default();
 

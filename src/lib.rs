@@ -1,6 +1,7 @@
 pub mod comm_ctrl;
 
-pub struct Color(u8, u8, u8, u8);
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Color(pub u8, pub u8, pub u8, pub u8);
 
 pub trait Window<'event>: Sized + Clone {
     type Error: std::error::Error;
@@ -17,6 +18,7 @@ pub trait Window<'event>: Sized + Clone {
     ) -> Result<&Self, Self::Error>;
     fn background(&self, color: Color) -> Result<&Self, Self::Error>;
     fn show(&self, visible: bool) -> Result<&Self, Self::Error>;
+    fn redraw(&self) -> Result<&Self, Self::Error>;
     fn enable(&self, enabled: bool) -> Result<&Self, Self::Error>;
 
     fn on_close<F: FnMut(&Self) + 'event>(&self, callback: F);

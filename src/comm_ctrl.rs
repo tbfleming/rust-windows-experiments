@@ -10,8 +10,19 @@ use std::{
 };
 use thiserror::Error;
 use windows::{
-    core, core::PCWSTR, Win32::Foundation::*, Win32::Graphics::Gdi::ValidateRect,
-    Win32::System::LibraryLoader::GetModuleHandleA, Win32::UI::WindowsAndMessaging::*,
+    core,
+    core::w,
+    core::PCWSTR,
+    Win32::Foundation::*,
+    Win32::Graphics::Gdi::ValidateRect,
+    Win32::System::LibraryLoader::GetModuleHandleA,
+    Win32::{
+        Graphics::Gdi::{
+            BeginPaint, CreateSolidBrush, DeleteObject, EndPaint, FillRect, InvalidateRect,
+            RedrawWindow, HDC, PAINTSTRUCT, RDW_ERASE, RDW_INVALIDATE,
+        },
+        UI::WindowsAndMessaging::*,
+    },
 };
 
 use crate::Color;
@@ -97,42 +108,18 @@ impl<'a, F: ?Sized> Drop for CallbackRef<'a, F> {
     }
 }
 
-struct WindowClass(u16);
-
-impl WindowClass {
-    unsafe fn register(wc: &WNDCLASSEXW) -> core::Result<Self> {
-        unsafe {
-            let atom = RegisterClassExW(wc);
-            if atom == 0 {
-                return Err(core::Error::from_win32());
-            }
-            Ok(Self(atom))
-        }
-    }
-}
-
-impl Drop for WindowClass {
-    fn drop(&mut self) {
-        unsafe {
-            if let Err(e) = UnregisterClassW(PCWSTR(self.0 as *const u16), None) {
-                eprintln!("UnregisterClassW failed: {:?}", e);
-            }
-        }
-    }
-}
-
 pub type Window<'event> = Pin<Rc<WindowImpl<'event>>>;
 
 pub struct WindowImpl<'event> {
     hwnd: RefCell<HWND>,
-    class: WindowClass, // safety: must outlive hwnd
     this: OnceCell<Weak<WindowImpl<'event>>>,
     events: WindowEvents<'event>,
+    options: RefCell<WindowOptions>,
     children: RefCell<Vec<Window<'event>>>,
 }
 
 #[derive(Default)]
-pub struct WindowEvents<'event> {
+struct WindowEvents<'event> {
     on_close: CallbackCell<dyn FnMut(&Window<'event>) + 'event>,
 }
 
@@ -142,12 +129,14 @@ impl WindowEvents<'_> {
     }
 }
 
+#[derive(Default)]
+struct WindowOptions {
+    background: Option<Color>,
+}
+
 impl<'event> WindowImpl<'event> {
     // !!! pub
     pub unsafe fn new(
-        class_name: &str,
-        window_name: &str,
-        class_style: WNDCLASS_STYLES,
         window_style: WINDOW_STYLE,
         window_ex_style: WINDOW_EX_STYLE,
         parent: HWND,
@@ -158,26 +147,31 @@ impl<'event> WindowImpl<'event> {
     ) -> core::Result<Pin<Rc<Self>>> {
         let instance = GetModuleHandleA(None)?;
 
-        let class = WindowClass::register(&WNDCLASSEXW {
-            cbSize: size_of::<WNDCLASSEXW>() as u32,
-            style: class_style,
-            lpfnWndProc: Some(WindowImpl::static_wndproc),
-            cbClsExtra: 0,
-            cbWndExtra: 0,
-            hInstance: instance.into(),
-            hIcon: Default::default(),
-            hCursor: Default::default(),
-            hbrBackground: Default::default(),
-            lpszMenuName: PCWSTR::null(),
-            lpszClassName: WideZString::new(class_name).pzwstr(),
-            hIconSm: Default::default(),
-        })?;
+        if GetClassInfoExW(instance, w!("general_window"), &mut WNDCLASSEXW::default()).is_err() {
+            let atom = RegisterClassExW(&WNDCLASSEXW {
+                cbSize: size_of::<WNDCLASSEXW>() as u32,
+                style: CS_HREDRAW | CS_VREDRAW,
+                lpfnWndProc: Some(WindowImpl::static_wndproc),
+                cbClsExtra: 0,
+                cbWndExtra: 0,
+                hInstance: instance.into(),
+                hIcon: Default::default(),
+                hCursor: Default::default(),
+                hbrBackground: Default::default(),
+                lpszMenuName: PCWSTR::null(),
+                lpszClassName: w!("general_window"),
+                hIconSm: Default::default(),
+            });
+            if atom == 0 {
+                return Err(core::Error::from_win32());
+            }
+        }
 
         let window = Rc::new(WindowImpl {
             hwnd: Default::default(),
-            class,
             this: Default::default(),
             events: Default::default(),
+            options: Default::default(),
             children: Default::default(),
         });
         window.this.set(Rc::downgrade(&window)).unwrap();
@@ -185,8 +179,8 @@ impl<'event> WindowImpl<'event> {
         // Side effect: static_wndproc sets window.hwnd
         let hwnd = CreateWindowExW(
             window_ex_style,
-            PCWSTR(window.class.0 as *const u16),
-            WideZString::new(window_name).pzwstr(),
+            w!("general_window"),
+            w!(""),
             window_style,
             x.unwrap_or(CW_USEDEFAULT),
             y.unwrap_or(CW_USEDEFAULT),
@@ -260,11 +254,34 @@ impl<'event> WindowImpl<'event> {
     // * self.hwnd must be valid and not null
     // * WindowImpl still exists, but we could be in drop(), so self.this() could be None.
     unsafe fn wndproc(&self, message: u32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
-        println!("message: {}", message);
+        // println!("message: {}", message);
         match message {
+            // WM_ERASEBKGND => {
+            //     println!("WM_ERASEBKGND");
+            //     if let Some(color) = self.options.borrow().background {
+            //         let hdc = HDC(wparam.0 as _);
+            //         let mut rect = Default::default();
+            //         if GetClientRect(self.hwnd(), &mut rect).is_ok() {
+            //             return LRESULT(1);
+            //         }
+            //     }
+            //     LRESULT(0)
+            // }
             WM_PAINT => {
                 println!("WM_PAINT");
-                ValidateRect(self.hwnd(), None);
+                let mut ps = PAINTSTRUCT::default();
+                let hdc = BeginPaint(self.hwnd(), &mut ps);
+                if let Some(color) = self.options.borrow().background {
+                    let brush = CreateSolidBrush(COLORREF(
+                        (color.0 as u32) | ((color.1 as u32) << 8) | ((color.2 as u32) << 16),
+                    ));
+                    let mut rect = Default::default();
+                    if GetClientRect(self.hwnd(), &mut rect).is_ok() {
+                        FillRect(hdc, &rect, brush);
+                    }
+                    DeleteObject(brush);
+                }
+                EndPaint(self.hwnd(), &ps);
                 LRESULT(0)
             }
             WM_CLOSE => {
@@ -302,7 +319,7 @@ impl<'event> WindowImpl<'event> {
         wparam: WPARAM,
         lparam: LPARAM,
     ) -> LRESULT {
-        println!("message: {}", message);
+        // println!("message: {}", message);
         let window;
         if message == WM_NCCREATE {
             // This is almost the first message received by the window. CreateWindowExW
@@ -317,7 +334,7 @@ impl<'event> WindowImpl<'event> {
         } else {
             window = GetWindowLongPtrW(handle, GWLP_USERDATA) as *const WindowImpl;
         }
-        println!("window: {:?}", window);
+        // println!("window: {:?}", window);
         if window.is_null() {
             println!("window == null");
             DefWindowProcW(handle, message, wparam, lparam)
@@ -349,11 +366,8 @@ impl<'event> crate::Window<'event> for Window<'event> {
         self.check_live()?;
         let child = unsafe {
             WindowImpl::new(
-                "ABCD",
-                "efgh",
-                CS_HREDRAW | CS_VREDRAW,
-                WS_VISIBLE,
-                WINDOW_EX_STYLE(0),
+                WS_CHILD | WS_VISIBLE | WS_CLIPSIBLINGS,
+                Default::default(),
                 self.hwnd(),
                 None,
                 None,
@@ -366,7 +380,11 @@ impl<'event> crate::Window<'event> for Window<'event> {
     }
 
     fn text(&self, text: &str) -> Result<&Self, Self::Error> {
-        todo!()
+        self.check_live()?;
+        unsafe {
+            SetWindowTextW(self.hwnd(), WideZString::new(text).pzwstr())?;
+            Ok(self)
+        }
     }
 
     fn bounds(
@@ -374,15 +392,57 @@ impl<'event> crate::Window<'event> for Window<'event> {
         upper_left: Option<(i32, i32)>,
         size: Option<(i32, i32)>,
     ) -> Result<&Self, Self::Error> {
-        todo!()
+        self.check_live()?;
+        unsafe {
+            let mut rect = RECT {
+                left: 0,
+                top: 0,
+                right: 0,
+                bottom: 0,
+            };
+            GetWindowRect(self.hwnd(), &mut rect)?;
+            let mut flags =
+                SWP_NOZORDER | SWP_NOOWNERZORDER | SWP_NOACTIVATE | SWP_NOMOVE | SWP_NOSIZE;
+            if let Some((x, y)) = upper_left {
+                rect.left = x;
+                rect.top = y;
+                flags &= !SWP_NOMOVE;
+            }
+            if let Some((w, h)) = size {
+                rect.right = rect.left + w;
+                rect.bottom = rect.top + h;
+                flags &= !SWP_NOSIZE;
+            }
+            SetWindowPos(
+                self.hwnd(),
+                HWND(0),
+                rect.left,
+                rect.top,
+                rect.right,
+                rect.bottom,
+                flags,
+            )?;
+            Ok(self)
+        }
     }
 
     fn background(&self, color: Color) -> Result<&Self, Self::Error> {
-        todo!()
+        self.check_live()?;
+        self.options.borrow_mut().background = Some(color);
+        self.redraw()
     }
 
     fn show(&self, visible: bool) -> Result<&Self, Self::Error> {
         todo!()
+    }
+
+    fn redraw(&self) -> Result<&Self, Self::Error> {
+        self.check_live()?;
+        unsafe {
+            println!("!!!!!!!!!!\n redrawing");
+            InvalidateRect(self.hwnd(), None, true);
+        }
+        Ok(self)
     }
 
     fn enable(&self, enabled: bool) -> Result<&Self, Self::Error> {
