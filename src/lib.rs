@@ -7,7 +7,7 @@ pub trait Window<'event>: Sized + Clone {
     type Child: Window<'event>;
 
     fn destroy(&self) -> Result<(), Self::Error>;
-    fn create_child(&self) -> Result<&Self::Child, Self::Error>;
+    fn create_child(&self) -> Result<Self::Child, Self::Error>;
 
     fn text(&self, text: &str) -> Result<&Self, Self::Error>;
     fn bounds(

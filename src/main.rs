@@ -1,12 +1,12 @@
 use std::mem::size_of;
 use trywin::{comm_ctrl, Window};
-use windows::Win32::UI::{
+use windows::Win32::{UI::{
     Controls::{InitCommonControlsEx, ICC_STANDARD_CLASSES, INITCOMMONCONTROLSEX},
     WindowsAndMessaging::{
         DispatchMessageA, GetMessageA, CS_HREDRAW, CS_VREDRAW, MSG, WS_EX_OVERLAPPEDWINDOW,
         WS_OVERLAPPEDWINDOW, WS_VISIBLE,
     },
-};
+}, Foundation::HWND};
 
 fn main() -> Result<(), comm_ctrl::Error> {
     unsafe {
@@ -21,6 +21,7 @@ fn main() -> Result<(), comm_ctrl::Error> {
             CS_HREDRAW | CS_VREDRAW,
             WS_OVERLAPPEDWINDOW | WS_VISIBLE,
             WS_EX_OVERLAPPEDWINDOW,
+            HWND(0),
             None,
             None,
             None,
@@ -30,6 +31,8 @@ fn main() -> Result<(), comm_ctrl::Error> {
             println!("on_close!!!");
             w.destroy().unwrap();
         });
+
+        // let b = window.create_child()?;
 
         let mut message = MSG::default();
 

@@ -20,6 +20,9 @@ use crate::Color;
 pub enum Error {
     #[error("{0}")]
     Windows(#[from] core::Error),
+
+    #[error("Window has been destroyed")]
+    Destroyed,
 }
 
 struct WideZString(Vec<u16>);
@@ -125,6 +128,7 @@ pub struct WindowImpl<'event> {
     class: WindowClass, // safety: must outlive hwnd
     this: OnceCell<Weak<WindowImpl<'event>>>,
     events: WindowEvents<'event>,
+    children: RefCell<Vec<Window<'event>>>,
 }
 
 #[derive(Default)]
@@ -146,6 +150,7 @@ impl<'event> WindowImpl<'event> {
         class_style: WNDCLASS_STYLES,
         window_style: WINDOW_STYLE,
         window_ex_style: WINDOW_EX_STYLE,
+        parent: HWND,
         x: Option<i32>,
         y: Option<i32>,
         w: Option<i32>,
@@ -173,6 +178,7 @@ impl<'event> WindowImpl<'event> {
             class,
             this: Default::default(),
             events: Default::default(),
+            children: Default::default(),
         });
         window.this.set(Rc::downgrade(&window)).unwrap();
 
@@ -186,7 +192,7 @@ impl<'event> WindowImpl<'event> {
             y.unwrap_or(CW_USEDEFAULT),
             w.unwrap_or(CW_USEDEFAULT),
             h.unwrap_or(CW_USEDEFAULT),
-            None,
+            parent,
             None,
             instance,
             Some(&*window as *const _ as _),
@@ -218,6 +224,14 @@ impl<'event> WindowImpl<'event> {
 
     fn live(&self) -> bool {
         *self.hwnd.borrow() != Default::default()
+    }
+
+    fn check_live(&self) -> Result<(), Error> {
+        if !self.live() {
+            Err(Error::Destroyed)
+        } else {
+            Ok(())
+        }
     }
 
     fn set_callback<F: ?Sized>(&self, cell: &CallbackCell<F>, f: Box<F>) {
@@ -269,6 +283,7 @@ impl<'event> WindowImpl<'event> {
             WM_NCDESTROY => {
                 println!("WM_NCDESTROY");
                 *self.hwnd.borrow_mut() = Default::default();
+                self.children.borrow_mut().clear();
                 self.events.clear(); // Clean up any callbacks that hold a circular Rc to us
                 LRESULT(0)
             }
@@ -330,8 +345,24 @@ impl<'event> crate::Window<'event> for Window<'event> {
         Ok(())
     }
 
-    fn create_child(&self) -> Result<&Self::Child, Self::Error> {
-        todo!()
+    fn create_child(&self) -> Result<Self::Child, Self::Error> {
+        self.check_live()?;
+        let child = unsafe {
+            WindowImpl::new(
+                "ABCD",
+                "efgh",
+                CS_HREDRAW | CS_VREDRAW,
+                WS_VISIBLE,
+                WINDOW_EX_STYLE(0),
+                self.hwnd(),
+                None,
+                None,
+                None,
+                None,
+            )?
+        };
+        self.children.borrow_mut().push(child.clone());
+        Ok(child)
     }
 
     fn text(&self, text: &str) -> Result<&Self, Self::Error> {
