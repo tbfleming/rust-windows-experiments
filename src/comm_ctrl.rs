@@ -4,6 +4,7 @@
 
 use std::{
     cell::{OnceCell, RefCell},
+    marker::PhantomPinned,
     mem::size_of,
     pin::Pin,
     rc::{Rc, Weak},
@@ -119,6 +120,7 @@ pub struct WindowImpl<'event> {
     events: WindowEvents<'event>,
     options: RefCell<WindowOptions>,
     children: RefCell<Vec<Window<'event>>>,
+    _pin: PhantomPinned,
 }
 
 #[derive(Default)]
@@ -186,6 +188,7 @@ impl<'event> WindowImpl<'event> {
             events: Default::default(),
             options: Default::default(),
             children: Default::default(),
+            _pin: PhantomPinned,
         });
         window.this.set(Rc::downgrade(&window)).unwrap();
 
@@ -223,7 +226,7 @@ impl<'event> WindowImpl<'event> {
             );
         }
 
-        Ok(Pin::new(window))
+        Ok(Pin::new_unchecked(window))
     }
 
     fn destroy(&self) -> core::Result<()> {
@@ -240,7 +243,7 @@ impl<'event> WindowImpl<'event> {
     }
 
     fn this(&self) -> Option<Window<'event>> {
-        Some(Pin::new(self.this.get()?.upgrade()?))
+        unsafe { Some(Pin::new_unchecked(self.this.get()?.upgrade()?)) }
     }
 
     fn live(&self) -> bool {
