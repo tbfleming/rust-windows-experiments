@@ -7,7 +7,7 @@ use windows::Win32::{
     },
 };
 
-fn main() -> Result<(), comm_ctrl::Error> {
+fn make() -> Result<trywin::comm_ctrl::Window, comm_ctrl::Error> {
     let window = unsafe {
         trywin::comm_ctrl::WindowImpl::new(
             WS_OVERLAPPEDWINDOW | WS_VISIBLE | WS_CLIPCHILDREN,
@@ -54,10 +54,13 @@ fn main() -> Result<(), comm_ctrl::Error> {
         .bounds(Some((100, 100)), Some((200, 100)))?
         .text("Here is some text and some more and more\r\nAnother line")?; // TODO: newline translation
 
-    // b.background(Color(127, 0, 127, 255))?;
+    Ok(window)
+}
+
+fn main() -> Result<(), comm_ctrl::Error> {
+    let _w = make()?;
 
     let mut message = MSG::default();
-
     unsafe {
         while GetMessageA(&mut message, None, 0, 0).into() {
             DispatchMessageA(&message);

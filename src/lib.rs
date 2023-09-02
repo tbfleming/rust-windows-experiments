@@ -37,9 +37,9 @@ pub struct EditOptions {
     pub want_return: bool,
 }
 
-pub trait Window<'event>: Sized + Clone {
+pub trait Window: Sized + Clone {
     type Error: std::error::Error;
-    type Child: Window<'event>;
+    type Child: Window;
 
     fn destroy(&self) -> Result<(), Self::Error>;
     fn create_child(&self, ty: ChildType) -> Result<Self::Child, Self::Error>;
@@ -54,6 +54,6 @@ pub trait Window<'event>: Sized + Clone {
     fn visible(self, visible: bool) -> Result<Self, Self::Error>;
     fn redraw(self) -> Result<Self, Self::Error>;
 
-    fn on_close<F: FnMut(&Self) + 'event>(self, callback: F) -> Result<Self, Self::Error>;
-    fn on_destroy<F: FnMut(&Self) + 'event>(self, callback: F) -> Result<Self, Self::Error>;
+    fn on_close<F: FnMut(&Self) + 'static>(self, callback: F) -> Result<Self, Self::Error>;
+    fn on_destroy<F: FnMut(&Self) + 'static>(self, callback: F) -> Result<Self, Self::Error>;
 }

@@ -112,24 +112,24 @@ impl<'a, F: ?Sized> Drop for CallbackRef<'a, F> {
     }
 }
 
-pub type Window<'event> = Pin<Rc<WindowImpl<'event>>>;
+pub type Window = Pin<Rc<WindowImpl>>;
 
-pub struct WindowImpl<'event> {
+pub struct WindowImpl {
     hwnd: RefCell<HWND>,
-    this: OnceCell<Weak<WindowImpl<'event>>>,
-    events: WindowEvents<'event>,
+    this: OnceCell<Weak<WindowImpl>>,
+    events: WindowEvents,
     options: RefCell<WindowOptions>,
-    children: RefCell<Vec<Window<'event>>>,
+    children: RefCell<Vec<Window>>,
     _pin: PhantomPinned,
 }
 
 #[derive(Default)]
-struct WindowEvents<'event> {
-    on_close: CallbackCell<dyn FnMut(&Window<'event>) + 'event>,
-    on_destroy: CallbackCell<dyn FnMut(&Window<'event>) + 'event>,
+struct WindowEvents {
+    on_close: CallbackCell<dyn FnMut(&Window)>,
+    on_destroy: CallbackCell<dyn FnMut(&Window)>,
 }
 
-impl WindowEvents<'_> {
+impl WindowEvents {
     fn clear(&self) {
         self.on_close.set(None);
         self.on_destroy.set(None);
@@ -141,7 +141,7 @@ struct WindowOptions {
     background: Option<Color>,
 }
 
-impl<'event> WindowImpl<'event> {
+impl WindowImpl {
     // !!! pub
     pub unsafe fn new(
         window_style: WINDOW_STYLE,
@@ -242,7 +242,7 @@ impl<'event> WindowImpl<'event> {
         }
     }
 
-    fn this(&self) -> Option<Window<'event>> {
+    fn this(&self) -> Option<Window> {
         unsafe { Some(Pin::new_unchecked(self.this.get()?.upgrade()?)) }
     }
 
@@ -400,7 +400,7 @@ impl<'event> WindowImpl<'event> {
     }
 }
 
-impl<'event> Drop for WindowImpl<'event> {
+impl Drop for WindowImpl {
     fn drop(&mut self) {
         if let Err(e) = self.destroy() {
             eprintln!("Window::destroy failed in drop handler: {:?}", e);
@@ -427,7 +427,7 @@ fn edit_options(opts: EditOptions) -> WINDOW_STYLE {
         )
 }
 
-impl<'event> crate::Window<'event> for Window<'event> {
+impl crate::Window for Window {
     type Error = Error;
     type Child = Self;
 
@@ -566,12 +566,12 @@ impl<'event> crate::Window<'event> for Window<'event> {
         Ok(self)
     }
 
-    fn on_close<F: FnMut(&Self) + 'event>(self, callback: F) -> Result<Self, Self::Error> {
+    fn on_close<F: FnMut(&Self) + 'static>(self, callback: F) -> Result<Self, Self::Error> {
         self.set_callback(&self.events.on_close, Box::new(callback));
         Ok(self)
     }
 
-    fn on_destroy<F: FnMut(&Self) + 'event>(self, callback: F) -> Result<Self, Self::Error> {
+    fn on_destroy<F: FnMut(&Self) + 'static>(self, callback: F) -> Result<Self, Self::Error> {
         self.set_callback(&self.events.on_destroy, Box::new(callback));
         Ok(self)
     }
