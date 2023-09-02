@@ -14,18 +14,21 @@ use windows::{
     core::w,
     core::PCWSTR,
     Win32::Foundation::*,
-    Win32::Graphics::Gdi::ValidateRect,
     Win32::System::LibraryLoader::GetModuleHandleA,
     Win32::{
         Graphics::Gdi::{
             BeginPaint, CreateSolidBrush, DeleteObject, EndPaint, FillRect, InvalidateRect,
-            RedrawWindow, HDC, PAINTSTRUCT, RDW_ERASE, RDW_INVALIDATE,
+            PAINTSTRUCT,
         },
-        UI::WindowsAndMessaging::*,
+        UI::{
+            Controls::{InitCommonControlsEx, ICC_STANDARD_CLASSES, INITCOMMONCONTROLSEX},
+            Shell::{DefSubclassProc, SetWindowSubclass},
+            WindowsAndMessaging::*,
+        },
     },
 };
 
-use crate::Color;
+use crate::{ChildType, Color};
 
 #[derive(Error, Debug)]
 pub enum Error {
@@ -140,6 +143,7 @@ impl<'event> WindowImpl<'event> {
         window_style: WINDOW_STYLE,
         window_ex_style: WINDOW_EX_STYLE,
         parent: HWND,
+        control_class: Option<&str>,
         x: Option<i32>,
         y: Option<i32>,
         w: Option<i32>,
@@ -147,7 +151,14 @@ impl<'event> WindowImpl<'event> {
     ) -> core::Result<Pin<Rc<Self>>> {
         let instance = GetModuleHandleA(None)?;
 
-        if GetClassInfoExW(instance, w!("general_window"), &mut WNDCLASSEXW::default()).is_err() {
+        if control_class.is_some() {
+            InitCommonControlsEx(&INITCOMMONCONTROLSEX {
+                dwSize: size_of::<INITCOMMONCONTROLSEX>() as u32,
+                dwICC: ICC_STANDARD_CLASSES,
+            });
+        } else if GetClassInfoExW(instance, w!("general_window"), &mut WNDCLASSEXW::default())
+            .is_err()
+        {
             let atom = RegisterClassExW(&WNDCLASSEXW {
                 cbSize: size_of::<WNDCLASSEXW>() as u32,
                 style: CS_HREDRAW | CS_VREDRAW,
@@ -176,10 +187,15 @@ impl<'event> WindowImpl<'event> {
         });
         window.this.set(Rc::downgrade(&window)).unwrap();
 
-        // Side effect: static_wndproc sets window.hwnd
+        // Side effect: static_wndproc sets window.hwnd, but not if control_class is Some.
         let hwnd = CreateWindowExW(
             window_ex_style,
-            w!("general_window"),
+            WideZString::new(if let Some(cls) = control_class {
+                cls
+            } else {
+                "general_window"
+            })
+            .pzwstr(),
             w!(""),
             window_style,
             x.unwrap_or(CW_USEDEFAULT),
@@ -191,9 +207,18 @@ impl<'event> WindowImpl<'event> {
             instance,
             Some(&*window as *const _ as _),
         );
-
         if hwnd == Default::default() {
             return Err(core::Error::from_win32());
+        }
+
+        if control_class.is_some() {
+            window.hwnd.replace(hwnd);
+            SetWindowSubclass(
+                hwnd,
+                Some(WindowImpl::static_subclass_wndproc),
+                0,
+                &*window as *const _ as _,
+            );
         }
 
         Ok(Pin::new(window))
@@ -253,21 +278,19 @@ impl<'event> WindowImpl<'event> {
     // safety:
     // * self.hwnd must be valid and not null
     // * WindowImpl still exists, but we could be in drop(), so self.this() could be None.
-    unsafe fn wndproc(&self, message: u32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
+    unsafe fn wndproc(
+        &self,
+        subclassed: bool,
+        message: u32,
+        _wparam: WPARAM,
+        _lparam: LPARAM,
+    ) -> Option<LRESULT> {
         // println!("message: {}", message);
         match message {
-            // WM_ERASEBKGND => {
-            //     println!("WM_ERASEBKGND");
-            //     if let Some(color) = self.options.borrow().background {
-            //         let hdc = HDC(wparam.0 as _);
-            //         let mut rect = Default::default();
-            //         if GetClientRect(self.hwnd(), &mut rect).is_ok() {
-            //             return LRESULT(1);
-            //         }
-            //     }
-            //     LRESULT(0)
-            // }
             WM_PAINT => {
+                if subclassed {
+                    return None;
+                }
                 println!("WM_PAINT");
                 let mut ps = PAINTSTRUCT::default();
                 let hdc = BeginPaint(self.hwnd(), &mut ps);
@@ -282,29 +305,29 @@ impl<'event> WindowImpl<'event> {
                     DeleteObject(brush);
                 }
                 EndPaint(self.hwnd(), &ps);
-                LRESULT(0)
+                Some(LRESULT(0))
             }
             WM_CLOSE => {
                 println!("WM_CLOSE");
                 if let Some(this) = self.this() {
                     self.events.on_close.with(|f| f(&this));
                 }
-                LRESULT(0)
+                Some(LRESULT(0))
             }
             WM_DESTROY => {
                 println!("WM_DESTROY");
                 // TODO: callback instead of PostQuitMessage
                 PostQuitMessage(0);
-                LRESULT(0)
+                None
             }
             WM_NCDESTROY => {
                 println!("WM_NCDESTROY");
                 *self.hwnd.borrow_mut() = Default::default();
                 self.children.borrow_mut().clear();
                 self.events.clear(); // Clean up any callbacks that hold a circular Rc to us
-                LRESULT(0)
+                None
             }
-            _ => DefWindowProcW(self.hwnd(), message, wparam, lparam),
+            _ => None,
         }
     }
 
@@ -339,7 +362,34 @@ impl<'event> WindowImpl<'event> {
             println!("window == null");
             DefWindowProcW(handle, message, wparam, lparam)
         } else {
-            (*window).wndproc(message, wparam, lparam)
+            (*window)
+                .wndproc(false, message, wparam, lparam)
+                .unwrap_or_else(|| DefWindowProcW(handle, message, wparam, lparam))
+        }
+    }
+
+    // Safety:
+    // * dwrefdata must point to the owning Window instance.
+    // * Windows message loops only call this in the same thread that called
+    //   CreateWindowExW, no matter what other threads do to the handle.
+    unsafe extern "system" fn static_subclass_wndproc(
+        handle: HWND,
+        message: u32,
+        wparam: WPARAM,
+        lparam: LPARAM,
+        _uidsubclass: usize,
+        dwrefdata: usize,
+    ) -> LRESULT {
+        // println!("message: {}", message);
+        let window = dwrefdata as *const WindowImpl;
+        println!("control window: {:?}", window);
+        if window.is_null() {
+            println!("window == null");
+            DefSubclassProc(handle, message, wparam, lparam)
+        } else {
+            (*window)
+                .wndproc(true, message, wparam, lparam)
+                .unwrap_or_else(|| DefSubclassProc(handle, message, wparam, lparam))
         }
     }
 }
@@ -362,18 +412,38 @@ impl<'event> crate::Window<'event> for Window<'event> {
         Ok(())
     }
 
-    fn create_child(&self) -> Result<Self::Child, Self::Error> {
+    fn create_child(&self, ty: ChildType) -> Result<Self::Child, Self::Error> {
         self.check_live()?;
-        let child = unsafe {
-            WindowImpl::new(
-                WS_CHILD | WS_VISIBLE | WS_CLIPSIBLINGS,
-                Default::default(),
-                self.hwnd(),
-                None,
-                None,
-                None,
-                None,
-            )?
+        let button = |style| -> Result<Self::Child, Self::Error> {
+            unsafe {
+                Ok(WindowImpl::new(
+                    style,
+                    Default::default(),
+                    self.hwnd(),
+                    Some("BUTTON"),
+                    None,
+                    None,
+                    None,
+                    None,
+                )?)
+            }
+        };
+        let child = match ty {
+            ChildType::Custom => unsafe {
+                WindowImpl::new(
+                    WS_CHILD | WS_VISIBLE | WS_CLIPSIBLINGS,
+                    Default::default(),
+                    self.hwnd(),
+                    None,
+                    None,
+                    None,
+                    None,
+                    None,
+                )?
+            },
+            ChildType::Button => {
+                button(WS_VISIBLE | WS_CHILD | WINDOW_STYLE(BS_PUSHBUTTON as u32))?
+            }
         };
         self.children.borrow_mut().push(child.clone());
         Ok(child)
@@ -432,8 +502,12 @@ impl<'event> crate::Window<'event> for Window<'event> {
         self.redraw()
     }
 
-    fn show(&self, visible: bool) -> Result<&Self, Self::Error> {
-        todo!()
+    fn visible(&self, visible: bool) -> Result<&Self, Self::Error> {
+        self.check_live()?;
+        unsafe {
+            ShowWindow(self.hwnd(), if visible { SW_SHOW } else { SW_HIDE });
+        }
+        Ok(self)
     }
 
     fn redraw(&self) -> Result<&Self, Self::Error> {
@@ -443,10 +517,6 @@ impl<'event> crate::Window<'event> for Window<'event> {
             InvalidateRect(self.hwnd(), None, true);
         }
         Ok(self)
-    }
-
-    fn enable(&self, enabled: bool) -> Result<&Self, Self::Error> {
-        todo!()
     }
 
     fn on_close<F: FnMut(&Self) + 'event>(&self, callback: F) {
