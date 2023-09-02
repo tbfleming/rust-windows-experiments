@@ -1,8 +1,5 @@
-use std::rc::Rc;
-use trywin::{
-    comm_ctrl::{self, System},
-    ChildType, Color, EditOptions, Window, WindowSystem,
-};
+use std::{error::Error, path::Path, rc::Rc};
+use trywin::{comm_ctrl::System, ChildType, Color, EditOptions, Window, WindowSystem};
 
 fn make<WS: WindowSystem>(ws: &WS) -> Result<WS::Window, WS::Error> {
     #![allow(unused_variables, dead_code)]
@@ -14,11 +11,15 @@ fn make<WS: WindowSystem>(ws: &WS) -> Result<WS::Window, WS::Error> {
     let color1 = window
         .create_child(ChildType::Custom)?
         .bounds(Some((10, 10)), Some((50, 50)))?
-        .background(Color(127, 0, 127, 255))?;
+        .background(Color(255, 0, 0, 255))?;
     let color2 = window
         .create_child(ChildType::Custom)?
         .bounds(Some((70, 10)), Some((50, 50)))?
-        .background(Color(0, 127, 127, 255))?;
+        .background(Color(0, 255, 0, 255))?;
+    let color3 = window
+        .create_child(ChildType::Custom)?
+        .bounds(Some((130, 10)), Some((50, 50)))?
+        .background(Color(0, 0, 255, 255))?;
     let button1 = window
         .create_child(ChildType::Button)?
         .bounds(Some((100, 50)), Some((100, 40)))?
@@ -49,6 +50,7 @@ fn make<WS: WindowSystem>(ws: &WS) -> Result<WS::Window, WS::Error> {
         window: WS::Window,
         color1: WS::Child,
         color2: WS::Child,
+        color3: WS::Child,
         button1: WS::Child,
         button2: WS::Child,
         edit: WS::Child,
@@ -57,26 +59,27 @@ fn make<WS: WindowSystem>(ws: &WS) -> Result<WS::Window, WS::Error> {
         window: window.clone(),
         color1: color1.clone(),
         color2: color2.clone(),
+        color3: color3.clone(),
         button1: button1.clone(),
         button2: button2.clone(),
         edit: edit.clone(),
     });
 
-    window.on_close({
-        let all = all.clone();
-        move || {
-            println!("xxxx colors");
-            all.color1.destroy().unwrap();
-            all.color2.destroy().unwrap();
-        }
-    })?;
-
     // window.on_close({
-    //     let window = window.clone();
+    //     let all = all.clone();
     //     move || {
-    //         window.destroy().unwrap();
+    //         println!("xxxx colors");
+    //         all.color1.destroy().unwrap();
+    //         all.color2.destroy().unwrap();
     //     }
     // })?;
+
+    window.on_close({
+        let window = window.clone();
+        move || {
+            window.destroy().unwrap();
+        }
+    })?;
 
     window.on_destroy({
         let ws = ws.clone();
@@ -86,8 +89,11 @@ fn make<WS: WindowSystem>(ws: &WS) -> Result<WS::Window, WS::Error> {
     Ok(window)
 }
 
-fn main() -> Result<(), comm_ctrl::Error> {
+fn main() -> Result<(), Box<dyn Error>> {
     let _w = make(&System)?;
+    // let _w = _w.move_offscreen()?;
+    let _w = _w.visible(true)?;
+    _w.snapshot()?.save_png(Path::new("snapshot.png"))?;
     System.event_loop()?;
     Ok(())
 }

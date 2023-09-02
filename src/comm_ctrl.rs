@@ -1,29 +1,23 @@
-// #![allow(dead_code, unused_imports, unused_variables)]
+// Uses win32 API calls. Safety notes appear where
+// lifetimes get tricky.
 #![allow(clippy::missing_safety_doc)]
 #![allow(clippy::too_many_arguments)]
 
-use std::{cell::RefCell, marker::PhantomPinned, mem::size_of, pin::Pin, rc::Rc};
+use std::{cell::RefCell, marker::PhantomPinned, mem::size_of, pin::Pin, rc::Rc, result::Result};
 use thiserror::Error;
 use windows::{
     core,
-    core::w,
-    core::PCWSTR,
-    Win32::Foundation::*,
-    Win32::System::LibraryLoader::GetModuleHandleA,
+    core::*,
     Win32::{
-        Graphics::Gdi::{
-            BeginPaint, CreateSolidBrush, DeleteObject, EndPaint, FillRect, InvalidateRect,
-            PAINTSTRUCT,
-        },
-        UI::{
-            Controls::{InitCommonControlsEx, ICC_STANDARD_CLASSES, INITCOMMONCONTROLSEX},
-            Shell::{DefSubclassProc, SetWindowSubclass},
-            WindowsAndMessaging::*,
-        },
+        Foundation::*, Graphics::Gdi::*, System::LibraryLoader::*, UI::WindowsAndMessaging::*,
+    },
+    Win32::{
+        Storage::Xps::*,
+        UI::{Controls::*, Shell::*},
     },
 };
 
-use crate::{ChildType, Color, EditOptions, WindowSystem};
+use crate::{Bitmap, ChildType, Color, EditOptions, WindowSystem};
 
 #[derive(Error, Debug)]
 pub enum Error {
@@ -32,6 +26,9 @@ pub enum Error {
 
     #[error("Window has been destroyed")]
     Destroyed,
+
+    #[error("Unsupported bitmap format")]
+    UnsupportedBitmapFormat,
 }
 
 struct WideZString(Vec<u16>);
@@ -52,6 +49,92 @@ impl From<&str> for WideZString {
     }
 }
 
+struct HBitmap(HBITMAP);
+
+impl HBitmap {
+    fn compatible(dc: HDC, width: i32, height: i32) -> Result<Self, Error> {
+        unsafe {
+            let bm = HBitmap(CreateCompatibleBitmap(dc, width, height));
+            if bm.0 .0 == 0 {
+                Err(core::Error::from_win32())?
+            }
+            Ok(bm)
+        }
+    }
+}
+
+impl Drop for HBitmap {
+    fn drop(&mut self) {
+        unsafe {
+            DeleteObject(self.0);
+        }
+    }
+}
+
+struct WindowDC(HDC, HWND);
+
+impl WindowDC {
+    fn new(hwnd: HWND) -> Result<Self, Error> {
+        unsafe {
+            let hdc = GetDC(hwnd);
+            if hdc.0 == 0 {
+                Err(core::Error::from_win32())?
+            }
+            Ok(Self(hdc, hwnd))
+        }
+    }
+}
+
+impl Drop for WindowDC {
+    fn drop(&mut self) {
+        unsafe {
+            ReleaseDC(self.1, self.0);
+        }
+    }
+}
+
+struct MemoryDc(HDC);
+
+impl MemoryDc {
+    fn compatible(hdc: HDC) -> Result<Self, Error> {
+        unsafe {
+            let dc = MemoryDc(CreateCompatibleDC(hdc));
+            if dc.0 .0 == 0 {
+                Err(core::Error::from_win32())?
+            }
+            Ok(dc)
+        }
+    }
+}
+
+impl Drop for MemoryDc {
+    fn drop(&mut self) {
+        unsafe {
+            DeleteDC(self.0);
+        }
+    }
+}
+
+fn select_object(hdc: HDC, obj: HGDIOBJ) -> Result<UnselectObject, Error> {
+    unsafe {
+        let old = SelectObject(hdc, obj);
+        if old.0 == 0 {
+            Err(core::Error::from_win32())?
+        }
+        Ok(UnselectObject(hdc, old))
+    }
+}
+
+struct UnselectObject(HDC, HGDIOBJ);
+
+impl Drop for UnselectObject {
+    fn drop(&mut self) {
+        unsafe {
+            SelectObject(self.0, self.1);
+        }
+    }
+}
+
 #[derive(Clone, Debug, Default)]
 pub struct System;
 
@@ -69,7 +152,7 @@ impl WindowSystem for System {
     fn main_window(&self) -> Result<Self::Window, Error> {
         unsafe {
             Ok(WindowImpl::new(
-                WS_OVERLAPPEDWINDOW | WS_VISIBLE | WS_CLIPCHILDREN,
+                WS_OVERLAPPEDWINDOW | WS_CLIPCHILDREN,
                 WS_EX_OVERLAPPEDWINDOW | WS_EX_CONTROLPARENT,
                 HWND(0),
                 None,
@@ -591,12 +674,104 @@ impl crate::Window<System> for Window {
         Ok(self)
     }
 
+    fn move_offscreen(self) -> Result<Self, Error> {
+        self.check_live()?;
+        unsafe {
+            SetWindowPos(
+                self.hwnd(),
+                HWND(0),
+                GetSystemMetrics(SM_XVIRTUALSCREEN) + GetSystemMetrics(SM_CXVIRTUALSCREEN) + 10,
+                0,
+                0,
+                0,
+                SWP_NOZORDER | SWP_NOOWNERZORDER | SWP_NOACTIVATE | SWP_NOSIZE,
+            )?;
+        }
+        Ok(self)
+    }
+
     fn redraw(self) -> Result<Self, Error> {
         self.check_live()?;
         unsafe {
             InvalidateRect(self.hwnd(), None, true);
         }
         Ok(self)
+    }
+
+    fn snapshot(&self) -> Result<Bitmap, Error> {
+        self.check_live()?;
+        unsafe {
+            let hwnd = self.hwnd();
+            let mut rect = RECT {
+                left: 0,
+                top: 0,
+                right: 0,
+                bottom: 0,
+            };
+            GetWindowRect(hwnd, &mut rect)?;
+            let window_dc = WindowDC::new(hwnd)?;
+            let bm =
+                HBitmap::compatible(window_dc.0, rect.right - rect.left, rect.bottom - rect.top)?;
+            let memory_dc = MemoryDc::compatible(window_dc.0)?;
+            let sel = select_object(memory_dc.0, HGDIOBJ(bm.0 .0))?;
+            if PrintWindow(hwnd, memory_dc.0, Default::default()).0 == 0 {
+                Err(core::Error::from_win32())?;
+            }
+            drop(sel);
+            let mut bmi = BITMAPINFO {
+                bmiHeader: BITMAPINFOHEADER {
+                    biSize: size_of::<BITMAPINFOHEADER>() as _,
+                    ..Default::default()
+                },
+                bmiColors: Default::default(),
+            };
+            if GetDIBits(
+                memory_dc.0,
+                bm.0,
+                0,
+                (rect.bottom - rect.top) as u32,
+                None,
+                &mut bmi,
+                DIB_RGB_COLORS,
+            ) == 0
+            {
+                Err(core::Error::from_win32())?;
+            }
+            bmi.bmiHeader.biHeight = -bmi.bmiHeader.biHeight.abs();
+            bmi.bmiHeader.biCompression = BI_RGB.0;
+            println!("bmi: {:?}", bmi);
+            if bmi.bmiHeader.biBitCount != 32
+                || bmi.bmiHeader.biPlanes != 1
+                || bmi.bmiHeader.biSizeImage == 0
+                || bmi.bmiHeader.biSizeImage & 3 != 0
+            {
+                Err(Error::UnsupportedBitmapFormat)?;
+            }
+            let mut bits = vec![0u32; bmi.bmiHeader.biSizeImage as usize / 4];
+            if GetDIBits(
+                memory_dc.0,
+                bm.0,
+                0,
+                (rect.bottom - rect.top) as u32,
+                Some(bits.as_mut_ptr() as _),
+                &mut bmi,
+                DIB_RGB_COLORS,
+            ) == 0
+            {
+                Err(core::Error::from_win32())?;
+            }
+            for pixel in &mut bits {
+                *pixel = 0xff000000
+                    | ((*pixel & 0xff) << 16)
+                    | (*pixel & 0xff00)
+                    | ((*pixel & 0xff0000) >> 16);
+            }
+            Ok(Bitmap {
+                width: bmi.bmiHeader.biWidth as u32,
+                height: -bmi.bmiHeader.biHeight as u32,
+                data: bits,
+            })
+        }
     }
 
     fn on_close<F: FnMut() + 'static>(&self, callback: F) -> Result<&Self, Error> {

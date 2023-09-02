@@ -1,3 +1,5 @@
+use std::{fs::File, io::BufWriter, path::Path};
+
 pub mod comm_ctrl;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -58,10 +60,36 @@ pub trait Window<WS: WindowSystem>: Clone + 'static {
         upper_left: Option<(i32, i32)>,
         size: Option<(i32, i32)>,
     ) -> Result<Self, WS::Error>;
+
+    // TODO: standard color support (e.g. COLOR_BTNFACE)
     fn background(self, color: Color) -> Result<Self, WS::Error>;
+
+    fn move_offscreen(self) -> Result<Self, WS::Error>;
     fn visible(self, visible: bool) -> Result<Self, WS::Error>;
     fn redraw(self) -> Result<Self, WS::Error>;
+    fn snapshot(&self) -> Result<Bitmap, WS::Error>;
 
     fn on_close<F: FnMut() + 'static>(&self, callback: F) -> Result<&Self, WS::Error>;
     fn on_destroy<F: FnMut() + 'static>(&self, callback: F) -> Result<&Self, WS::Error>;
+}
+
+pub struct Bitmap {
+    pub width: u32,
+    pub height: u32,
+
+    /// 0xAABBGGRR, length = width * height
+    pub data: Vec<u32>,
+}
+
+impl Bitmap {
+    // TODO: error type
+    pub fn save_png(&self, path: impl AsRef<Path>) -> Result<(), Box<dyn std::error::Error>> {
+        let mut png =
+            png::Encoder::new(BufWriter::new(File::create(path)?), self.width, self.height);
+        png.set_color(png::ColorType::Rgba);
+        png.set_depth(png::BitDepth::Eight);
+        let mut writer = png.write_header()?;
+        writer.write_image_data(bytemuck::cast_slice(&self.data))?;
+        Ok(())
+    }
 }
