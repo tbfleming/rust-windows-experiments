@@ -29,7 +29,7 @@ use windows::{
     },
 };
 
-use crate::{ChildType, Color, EditOptions};
+use crate::{ChildType, Color, EditOptions, WindowSystem};
 
 #[derive(Error, Debug)]
 pub enum Error {
@@ -55,6 +55,52 @@ impl WideZString {
 impl From<&str> for WideZString {
     fn from(s: &str) -> Self {
         Self::new(s)
+    }
+}
+
+#[derive(Clone, Debug, Default)]
+pub struct System;
+
+impl System {
+    pub fn new() -> Self {
+        Self {}
+    }
+}
+
+impl WindowSystem for System {
+    type Error = Error;
+    type Window = Window;
+
+    fn main_window(&self) -> Result<Self::Window, Error> {
+        unsafe {
+            Ok(WindowImpl::new(
+                WS_OVERLAPPEDWINDOW | WS_VISIBLE | WS_CLIPCHILDREN,
+                WS_EX_OVERLAPPEDWINDOW | WS_EX_CONTROLPARENT,
+                HWND(0),
+                None,
+                None,
+                None,
+                None,
+                None,
+            )?)
+        }
+    }
+
+    fn event_loop(&self) -> Result<(), Error> {
+        unsafe {
+            let mut msg = MSG::default();
+            while GetMessageA(&mut msg, HWND(0), 0, 0).into() {
+                DispatchMessageA(&msg);
+            }
+            Ok(())
+        }
+    }
+
+    fn exit_loop(&self) -> Result<(), Error> {
+        unsafe {
+            PostQuitMessage(0);
+            Ok(())
+        }
     }
 }
 
@@ -142,8 +188,7 @@ struct WindowOptions {
 }
 
 impl WindowImpl {
-    // !!! pub
-    pub unsafe fn new(
+    unsafe fn new(
         window_style: WINDOW_STYLE,
         window_ex_style: WINDOW_EX_STYLE,
         parent: HWND,
@@ -427,18 +472,21 @@ fn edit_options(opts: EditOptions) -> WINDOW_STYLE {
         )
 }
 
-impl crate::Window for Window {
-    type Error = Error;
+impl crate::Window<System> for Window {
     type Child = Self;
 
-    fn destroy(&self) -> Result<(), Self::Error> {
+    fn system(&self) -> System {
+        System::new()
+    }
+
+    fn destroy(&self) -> Result<(), Error> {
         WindowImpl::destroy(self)?;
         Ok(())
     }
 
-    fn create_child(&self, ty: ChildType) -> Result<Self::Child, Self::Error> {
+    fn create_child(&self, ty: ChildType) -> Result<Self::Child, Error> {
         self.check_live()?;
-        let control = |class, style| -> Result<Self::Child, Self::Error> {
+        let control = |class, style| -> Result<Self::Child, Error> {
             unsafe {
                 Ok(WindowImpl::new(
                     style,
@@ -495,7 +543,7 @@ impl crate::Window for Window {
         Ok(child)
     }
 
-    fn text(self, text: &str) -> Result<Self, Self::Error> {
+    fn text(self, text: &str) -> Result<Self, Error> {
         self.check_live()?;
         unsafe {
             SetWindowTextW(self.hwnd(), WideZString::new(text).pzwstr())?;
@@ -507,7 +555,7 @@ impl crate::Window for Window {
         self,
         upper_left: Option<(i32, i32)>,
         size: Option<(i32, i32)>,
-    ) -> Result<Self, Self::Error> {
+    ) -> Result<Self, Error> {
         self.check_live()?;
         unsafe {
             let mut rect = RECT {
@@ -544,13 +592,13 @@ impl crate::Window for Window {
         }
     }
 
-    fn background(self, color: Color) -> Result<Self, Self::Error> {
+    fn background(self, color: Color) -> Result<Self, Error> {
         self.check_live()?;
         self.options.borrow_mut().background = Some(color);
         self.redraw()
     }
 
-    fn visible(self, visible: bool) -> Result<Self, Self::Error> {
+    fn visible(self, visible: bool) -> Result<Self, Error> {
         self.check_live()?;
         unsafe {
             ShowWindow(self.hwnd(), if visible { SW_SHOW } else { SW_HIDE });
@@ -558,7 +606,7 @@ impl crate::Window for Window {
         Ok(self)
     }
 
-    fn redraw(self) -> Result<Self, Self::Error> {
+    fn redraw(self) -> Result<Self, Error> {
         self.check_live()?;
         unsafe {
             InvalidateRect(self.hwnd(), None, true);
@@ -566,12 +614,12 @@ impl crate::Window for Window {
         Ok(self)
     }
 
-    fn on_close<F: FnMut(&Self) + 'static>(self, callback: F) -> Result<Self, Self::Error> {
+    fn on_close<F: FnMut(&Self) + 'static>(self, callback: F) -> Result<Self, Error> {
         self.set_callback(&self.events.on_close, Box::new(callback));
         Ok(self)
     }
 
-    fn on_destroy<F: FnMut(&Self) + 'static>(self, callback: F) -> Result<Self, Self::Error> {
+    fn on_destroy<F: FnMut(&Self) + 'static>(self, callback: F) -> Result<Self, Error> {
         self.set_callback(&self.events.on_destroy, Box::new(callback));
         Ok(self)
     }

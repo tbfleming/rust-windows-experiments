@@ -37,23 +37,32 @@ pub struct EditOptions {
     pub want_return: bool,
 }
 
-pub trait Window: Sized + Clone {
+pub trait WindowSystem: Clone {
     type Error: std::error::Error;
-    type Child: Window;
+    type Window: Window<Self>;
 
-    fn destroy(&self) -> Result<(), Self::Error>;
-    fn create_child(&self, ty: ChildType) -> Result<Self::Child, Self::Error>;
+    fn main_window(&self) -> Result<Self::Window, Self::Error>;
+    fn event_loop(&self) -> Result<(), Self::Error>;
+    fn exit_loop(&self) -> Result<(), Self::Error>;
+}
 
-    fn text(self, text: &str) -> Result<Self, Self::Error>;
+pub trait Window<WS: WindowSystem>: Clone {
+    type Child: Window<WS>;
+
+    fn system(&self) -> WS;
+    fn destroy(&self) -> Result<(), WS::Error>;
+    fn create_child(&self, ty: ChildType) -> Result<Self::Child, WS::Error>;
+
+    fn text(self, text: &str) -> Result<Self, WS::Error>;
     fn bounds(
         self,
         upper_left: Option<(i32, i32)>,
         size: Option<(i32, i32)>,
-    ) -> Result<Self, Self::Error>;
-    fn background(self, color: Color) -> Result<Self, Self::Error>;
-    fn visible(self, visible: bool) -> Result<Self, Self::Error>;
-    fn redraw(self) -> Result<Self, Self::Error>;
+    ) -> Result<Self, WS::Error>;
+    fn background(self, color: Color) -> Result<Self, WS::Error>;
+    fn visible(self, visible: bool) -> Result<Self, WS::Error>;
+    fn redraw(self) -> Result<Self, WS::Error>;
 
-    fn on_close<F: FnMut(&Self) + 'static>(self, callback: F) -> Result<Self, Self::Error>;
-    fn on_destroy<F: FnMut(&Self) + 'static>(self, callback: F) -> Result<Self, Self::Error>;
+    fn on_close<F: FnMut(&Self) + 'static>(self, callback: F) -> Result<Self, WS::Error>;
+    fn on_destroy<F: FnMut(&Self) + 'static>(self, callback: F) -> Result<Self, WS::Error>;
 }

@@ -1,27 +1,10 @@
-use trywin::{comm_ctrl, Color, EditOptions, Window};
-use windows::Win32::{
-    Foundation::HWND,
-    UI::WindowsAndMessaging::{
-        DispatchMessageA, GetMessageA, PostQuitMessage, MSG, WS_CLIPCHILDREN, WS_EX_CONTROLPARENT,
-        WS_EX_OVERLAPPEDWINDOW, WS_OVERLAPPEDWINDOW, WS_VISIBLE,
-    },
+use trywin::{
+    comm_ctrl::{self, System},
+    Color, EditOptions, Window, WindowSystem,
 };
 
-fn make() -> Result<trywin::comm_ctrl::Window, comm_ctrl::Error> {
-    let window = unsafe {
-        trywin::comm_ctrl::WindowImpl::new(
-            WS_OVERLAPPEDWINDOW | WS_VISIBLE | WS_CLIPCHILDREN,
-            WS_EX_OVERLAPPEDWINDOW | WS_EX_CONTROLPARENT,
-            HWND(0),
-            None,
-            None,
-            None,
-            None,
-            None,
-        )
-    }?
-    .text("Hello, world!")?
-    .on_close(|w: &trywin::comm_ctrl::Window| {
+fn make<WS: WindowSystem>(ws: &WS) -> Result<WS::Window, WS::Error> {
+    let window = ws.main_window()?.text("Hello, world!")?.on_close(|w| {
         w.destroy().unwrap();
     })?;
 
@@ -34,7 +17,7 @@ fn make() -> Result<trywin::comm_ctrl::Window, comm_ctrl::Error> {
         .create_child(trywin::ChildType::Button)?
         .bounds(Some((100, 50)), Some((100, 40)))?
         .text("A &Button")?
-        .on_destroy(|_| unsafe { PostQuitMessage(0) })?;
+        .on_destroy(|w| w.system().exit_loop().unwrap())?;
 
     window
         .create_child(trywin::ChildType::Edit(EditOptions {
@@ -58,14 +41,7 @@ fn make() -> Result<trywin::comm_ctrl::Window, comm_ctrl::Error> {
 }
 
 fn main() -> Result<(), comm_ctrl::Error> {
-    let _w = make()?;
-
-    let mut message = MSG::default();
-    unsafe {
-        while GetMessageA(&mut message, None, 0, 0).into() {
-            DispatchMessageA(&message);
-        }
-    }
-
+    let _w = make(&System)?;
+    System.event_loop()?;
     Ok(())
 }
