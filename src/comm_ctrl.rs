@@ -28,7 +28,7 @@ use windows::{
     },
 };
 
-use crate::{ChildType, Color};
+use crate::{ChildType, Color, EditOptions};
 
 #[derive(Error, Debug)]
 pub enum Error {
@@ -124,11 +124,13 @@ pub struct WindowImpl<'event> {
 #[derive(Default)]
 struct WindowEvents<'event> {
     on_close: CallbackCell<dyn FnMut(&Window<'event>) + 'event>,
+    on_destroy: CallbackCell<dyn FnMut(&Window<'event>) + 'event>,
 }
 
 impl WindowEvents<'_> {
     fn clear(&self) {
         self.on_close.set(None);
+        self.on_destroy.set(None);
     }
 }
 
@@ -316,8 +318,9 @@ impl<'event> WindowImpl<'event> {
             }
             WM_DESTROY => {
                 println!("WM_DESTROY");
-                // TODO: callback instead of PostQuitMessage
-                PostQuitMessage(0);
+                if let Some(this) = self.this() {
+                    self.events.on_destroy.with(|f| f(&this));
+                }
                 None
             }
             WM_NCDESTROY => {
@@ -403,6 +406,24 @@ impl<'event> Drop for WindowImpl<'event> {
     }
 }
 
+fn edit_options(opts: EditOptions) -> WINDOW_STYLE {
+    WS_CHILD
+        | if opts.border { WS_BORDER } else { WS_CHILD }
+        | if opts.hscroll { WS_HSCROLL } else { WS_CHILD }
+        | if opts.vscroll { WS_VSCROLL } else { WS_CHILD }
+        | WINDOW_STYLE(
+            (if opts.auto_hscroll { ES_AUTOHSCROLL } else { 0 }
+                | if opts.auto_vscroll { ES_AUTOVSCROLL } else { 0 }
+                | if opts.center { ES_CENTER } else { 0 }
+                | if opts.lower_case { ES_LOWERCASE } else { 0 }
+                | if opts.multiline { ES_MULTILINE } else { 0 }
+                | if opts.password { ES_PASSWORD } else { 0 }
+                | if opts.readonly { ES_READONLY } else { 0 }
+                | if opts.uppercase { ES_UPPERCASE } else { 0 }
+                | if opts.want_return { ES_WANTRETURN } else { 0 }) as u32,
+        )
+}
+
 impl<'event> crate::Window<'event> for Window<'event> {
     type Error = Error;
     type Child = Self;
@@ -414,13 +435,13 @@ impl<'event> crate::Window<'event> for Window<'event> {
 
     fn create_child(&self, ty: ChildType) -> Result<Self::Child, Self::Error> {
         self.check_live()?;
-        let button = |style| -> Result<Self::Child, Self::Error> {
+        let control = |class, style| -> Result<Self::Child, Self::Error> {
             unsafe {
                 Ok(WindowImpl::new(
                     style,
                     Default::default(),
                     self.hwnd(),
-                    Some("BUTTON"),
+                    Some(class),
                     None,
                     None,
                     None,
@@ -441,9 +462,31 @@ impl<'event> crate::Window<'event> for Window<'event> {
                     None,
                 )?
             },
-            ChildType::Button => {
-                button(WS_VISIBLE | WS_CHILD | WINDOW_STYLE(BS_PUSHBUTTON as u32))?
-            }
+            ChildType::Button => control(
+                "BUTTON",
+                WS_VISIBLE | WS_CHILD | WINDOW_STYLE(BS_PUSHBUTTON as u32),
+            )?,
+            ChildType::DefaultButton => control(
+                "BUTTON",
+                WS_VISIBLE | WS_CHILD | WINDOW_STYLE(BS_DEFPUSHBUTTON as u32),
+            )?,
+            ChildType::Checkbox => control(
+                "BUTTON",
+                WS_VISIBLE | WS_CHILD | WINDOW_STYLE(BS_CHECKBOX as u32),
+            )?,
+            ChildType::TristateCheckbox => control(
+                "BUTTON",
+                WS_VISIBLE | WS_CHILD | WINDOW_STYLE(BS_3STATE as u32),
+            )?,
+            ChildType::Groupbox => control(
+                "BUTTON",
+                WS_VISIBLE | WS_CHILD | WINDOW_STYLE(BS_GROUPBOX as u32),
+            )?,
+            ChildType::Radio => control(
+                "BUTTON",
+                WS_VISIBLE | WS_CHILD | WINDOW_STYLE(BS_RADIOBUTTON as u32),
+            )?,
+            ChildType::Edit(opts) => control("EDIT", WS_VISIBLE | WS_CHILD | edit_options(opts))?,
         };
         self.children.borrow_mut().push(child.clone());
         Ok(child)
@@ -520,7 +563,13 @@ impl<'event> crate::Window<'event> for Window<'event> {
         Ok(self)
     }
 
-    fn on_close<F: FnMut(&Self) + 'event>(&self, callback: F) {
+    fn on_close<F: FnMut(&Self) + 'event>(&self, callback: F) -> Result<&Self, Self::Error> {
         self.set_callback(&self.events.on_close, Box::new(callback));
+        Ok(self)
+    }
+
+    fn on_destroy<F: FnMut(&Self) + 'event>(&self, callback: F) -> Result<&Self, Self::Error> {
+        self.set_callback(&self.events.on_destroy, Box::new(callback));
+        Ok(self)
     }
 }
