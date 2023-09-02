@@ -164,6 +164,7 @@ impl WindowSystem for System {
         }
     }
 
+    // TODO: keyboard, dialog, redirect control notifications
     fn event_loop(&self) -> Result<(), Error> {
         unsafe {
             let mut msg = MSG::default();
@@ -355,7 +356,7 @@ impl WindowImpl {
     fn destroy(&self) -> core::Result<()> {
         unsafe {
             let handle = self.hwnd();
-            println!("drop handle: {:?}", handle);
+            // println!("drop handle: {:?}", handle);
             if handle != Default::default() {
                 // wndproc will set self.hwnd to null
                 DestroyWindow(handle)
@@ -432,17 +433,17 @@ impl WindowImpl {
                 Some(LRESULT(0))
             }
             WM_CLOSE => {
-                println!("WM_CLOSE");
+                // println!("WM_CLOSE");
                 self.events.on_close.with(|f| f());
                 Some(LRESULT(0))
             }
             WM_DESTROY => {
-                println!("WM_DESTROY");
+                // println!("WM_DESTROY");
                 self.events.on_destroy.with(|f| f());
                 None
             }
             WM_NCDESTROY => {
-                println!("WM_NCDESTROY");
+                // println!("WM_NCDESTROY");
                 *self.hwnd.borrow_mut() = Default::default();
                 self.children.borrow_mut().clear();
                 self.events.clear(); // Clean up any callbacks that hold a circular Rc to us
@@ -470,7 +471,7 @@ impl WindowImpl {
             // hasn't returned yet, so we're responsible for setting window.hwnd.
             // Hopefully we'll never need to handle WM_GETMINMAXINFO, which comes first,
             // since I don't want to thunk wndproc.
-            println!("WM_NCCREATE");
+            // println!("WM_NCCREATE");
             let cs = &*(lparam.0 as *const CREATESTRUCTW);
             window = cs.lpCreateParams as *const WindowImpl;
             (*window).hwnd.replace(handle);
@@ -480,7 +481,7 @@ impl WindowImpl {
         }
         // println!("window: {:?}", window);
         if window.is_null() {
-            println!("window == null");
+            // println!("window == null");
             DefWindowProcW(handle, message, wparam, lparam)
         } else {
             (*window)
@@ -505,7 +506,7 @@ impl WindowImpl {
         let window = dwrefdata as *const WindowImpl;
         // println!("control window: {:?}", window);
         if window.is_null() {
-            println!("window == null");
+            // println!("window == null");
             DefSubclassProc(handle, message, wparam, lparam)
         } else {
             (*window)
@@ -520,7 +521,7 @@ impl Drop for WindowImpl {
         if let Err(e) = self.destroy() {
             eprintln!("Window::destroy failed in drop handler: {:?}", e);
         }
-        print!("drop WindowImpl");
+        // println!("drop WindowImpl");
     }
 }
 
@@ -739,7 +740,7 @@ impl crate::Window<System> for Window {
             }
             bmi.bmiHeader.biHeight = -bmi.bmiHeader.biHeight.abs();
             bmi.bmiHeader.biCompression = BI_RGB.0;
-            println!("bmi: {:?}", bmi);
+            // println!("bmi: {:?}", bmi);
             if bmi.bmiHeader.biBitCount != 32
                 || bmi.bmiHeader.biPlanes != 1
                 || bmi.bmiHeader.biSizeImage == 0

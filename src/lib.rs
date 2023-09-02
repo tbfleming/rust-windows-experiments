@@ -5,10 +5,12 @@ pub mod comm_ctrl;
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Color(pub u8, pub u8, pub u8, pub u8);
 
+#[non_exhaustive]
+#[derive(Clone, Debug)]
 pub enum ChildType {
     Custom,
     Button,
-    DefaultButton,
+    DefaultButton, // TODO: move into Button?
     Checkbox,
     TristateCheckbox,
     Groupbox,
@@ -16,18 +18,11 @@ pub enum ChildType {
     Edit(EditOptions),
 }
 
-pub struct ButtonOptions {
-    pub pushbutton: bool,
-    pub default_pushbutton: bool,
-    pub checkbox: bool,
-    pub tristate: bool,
-}
-
+#[derive(Clone, Debug, Default)]
 pub struct EditOptions {
     pub border: bool,
     pub hscroll: bool,
     pub vscroll: bool,
-
     pub auto_hscroll: bool,
     pub auto_vscroll: bool,
     pub center: bool,
@@ -64,6 +59,7 @@ pub trait Window<WS: WindowSystem>: Clone + 'static {
     // TODO: standard color support (e.g. COLOR_BTNFACE)
     fn background(self, color: Color) -> Result<Self, WS::Error>;
 
+    // TODO: option to not activate and to not go on the taskbar
     fn move_offscreen(self) -> Result<Self, WS::Error>;
     fn visible(self, visible: bool) -> Result<Self, WS::Error>;
     fn redraw(self) -> Result<Self, WS::Error>;
@@ -71,8 +67,10 @@ pub trait Window<WS: WindowSystem>: Clone + 'static {
 
     fn on_close<F: FnMut() + 'static>(&self, callback: F) -> Result<&Self, WS::Error>;
     fn on_destroy<F: FnMut() + 'static>(&self, callback: F) -> Result<&Self, WS::Error>;
+    // TODO: mouse, set cursor
 }
 
+#[derive(Clone, Debug, Default)]
 pub struct Bitmap {
     pub width: u32,
     pub height: u32,
