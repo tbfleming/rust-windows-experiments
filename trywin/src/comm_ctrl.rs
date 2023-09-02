@@ -149,7 +149,7 @@ impl WindowSystem for System {
     type Window = Window;
     type Child = Window;
 
-    fn main_window(&self) -> Result<Self::Window, Error> {
+    fn new_main(&self) -> Result<Self::Window, Error> {
         unsafe {
             Ok(WindowImpl::new(
                 WS_OVERLAPPEDWINDOW | WS_CLIPCHILDREN,
@@ -553,7 +553,7 @@ impl crate::Window<System> for Window {
         Ok(())
     }
 
-    fn create_child(&self, ty: ChildType) -> Result<Window, Error> {
+    fn new_child(&self, ty: ChildType) -> Result<Window, Error> {
         self.check_live()?;
         let control = |class, style| -> Result<Window, Error> {
             unsafe {

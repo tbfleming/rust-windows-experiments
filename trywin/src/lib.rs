@@ -39,7 +39,7 @@ pub trait WindowSystem: Clone + 'static {
     type Window: Window<Self>;
     type Child: Window<Self>;
 
-    fn main_window(&self) -> Result<Self::Window, Self::Error>;
+    fn new_main(&self) -> Result<Self::Window, Self::Error>;
     fn event_loop(&self) -> Result<(), Self::Error>;
     fn exit_loop(&self) -> Result<(), Self::Error>;
 }
@@ -47,7 +47,7 @@ pub trait WindowSystem: Clone + 'static {
 pub trait Window<WS: WindowSystem>: Clone + 'static {
     fn system(&self) -> WS;
     fn destroy(&self) -> Result<(), WS::Error>;
-    fn create_child(&self, ty: ChildType) -> Result<WS::Child, WS::Error>;
+    fn new_child(&self, ty: ChildType) -> Result<WS::Child, WS::Error>;
 
     fn text(self, text: &str) -> Result<Self, WS::Error>;
     fn bounds(

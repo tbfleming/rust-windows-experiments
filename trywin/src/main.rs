@@ -4,32 +4,32 @@ fn make<WS: ::trywin::WindowSystem>(ws: &WS) -> Result<WS::Window, WS::Error> {
     use ::trywin::*;
 
     let window = ws
-        .main_window()?
+        .new_main()?
         .bounds(None, Some((500, 300)))?
         .text("Hello, world!")?
         .background(Color(128, 128, 128, 0))?;
     let color1 = window
-        .create_child(ChildType::Custom)?
+        .new_child(ChildType::Custom)?
         .bounds(Some((10, 10)), Some((50, 50)))?
         .background(Color(255, 0, 0, 255))?;
     let color2 = window
-        .create_child(ChildType::Custom)?
+        .new_child(ChildType::Custom)?
         .bounds(Some((70, 10)), Some((50, 50)))?
         .background(Color(0, 255, 0, 255))?;
     let color3 = window
-        .create_child(ChildType::Custom)?
+        .new_child(ChildType::Custom)?
         .bounds(Some((130, 10)), Some((50, 50)))?
         .background(Color(0, 0, 255, 255))?;
     let button1 = window
-        .create_child(ChildType::Button)?
+        .new_child(ChildType::Button)?
         .bounds(Some((100, 50)), Some((100, 40)))?
         .text("A &Button 1")?;
     let button2 = window
-        .create_child(ChildType::Button)?
+        .new_child(ChildType::Button)?
         .bounds(Some((100, 100)), Some((100, 40)))?
         .text("A &Button 2")?;
     let edit = window
-        .create_child(ChildType::Edit(EditOptions {
+        .new_child(ChildType::Edit(EditOptions {
             border: true,
             hscroll: false,
             vscroll: true,
