@@ -1,4 +1,4 @@
-#![allow(dead_code, unused_imports, unused_variables)]
+// #![allow(dead_code, unused_imports, unused_variables)]
 #![allow(clippy::missing_safety_doc)]
 #![allow(clippy::too_many_arguments)]
 
@@ -291,7 +291,7 @@ impl<'event> WindowImpl<'event> {
                 if subclassed {
                     return None;
                 }
-                println!("WM_PAINT");
+                // println!("WM_PAINT");
                 let mut ps = PAINTSTRUCT::default();
                 let hdc = BeginPaint(self.hwnd(), &mut ps);
                 if let Some(color) = self.options.borrow().background {
@@ -382,7 +382,7 @@ impl<'event> WindowImpl<'event> {
     ) -> LRESULT {
         // println!("message: {}", message);
         let window = dwrefdata as *const WindowImpl;
-        println!("control window: {:?}", window);
+        // println!("control window: {:?}", window);
         if window.is_null() {
             println!("window == null");
             DefSubclassProc(handle, message, wparam, lparam)
@@ -471,26 +471,28 @@ impl<'event> crate::Window<'event> for Window<'event> {
                 bottom: 0,
             };
             GetWindowRect(self.hwnd(), &mut rect)?;
-            let mut flags =
-                SWP_NOZORDER | SWP_NOOWNERZORDER | SWP_NOACTIVATE | SWP_NOMOVE | SWP_NOSIZE;
-            if let Some((x, y)) = upper_left {
-                rect.left = x;
-                rect.top = y;
-                flags &= !SWP_NOMOVE;
+            let (mut x, mut y, mut cx, mut cy) = (
+                rect.left,
+                rect.top,
+                rect.right - rect.left,
+                rect.bottom - rect.top,
+            );
+            if let Some((xx, yy)) = upper_left {
+                x = xx;
+                y = yy;
             }
             if let Some((w, h)) = size {
-                rect.right = rect.left + w;
-                rect.bottom = rect.top + h;
-                flags &= !SWP_NOSIZE;
+                cx = w;
+                cy = h;
             }
             SetWindowPos(
                 self.hwnd(),
                 HWND(0),
-                rect.left,
-                rect.top,
-                rect.right,
-                rect.bottom,
-                flags,
+                x,
+                y,
+                cx,
+                cy,
+                SWP_NOZORDER | SWP_NOOWNERZORDER | SWP_NOACTIVATE,
             )?;
             Ok(self)
         }
@@ -513,7 +515,6 @@ impl<'event> crate::Window<'event> for Window<'event> {
     fn redraw(&self) -> Result<&Self, Self::Error> {
         self.check_live()?;
         unsafe {
-            println!("!!!!!!!!!!\n redrawing");
             InvalidateRect(self.hwnd(), None, true);
         }
         Ok(self)

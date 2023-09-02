@@ -28,9 +28,11 @@ fn main() -> Result<(), comm_ctrl::Error> {
         //     w.background(Color(0, 127, 0, 255)).unwrap();
         // });
 
-        let b = window.create_child(trywin::ChildType::Button)?;
-        b.bounds(Some((100, 100)), Some((400, 400)))?;
-        b.text("A &Button")?;
+        window
+            .create_child(trywin::ChildType::Button)?
+            .bounds(Some((100, 50)), Some((100, 40)))?
+            .text("A &Button")?;
+
         // b.background(Color(127, 0, 127, 255))?;
 
         let mut message = MSG::default();
