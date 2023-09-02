@@ -1,11 +1,11 @@
 use std::{error::Error, path::Path, rc::Rc};
-use trywin::{comm_ctrl::System, ChildType, Color, EditOptions, Window, WindowSystem};
 
-fn make<WS: WindowSystem>(ws: &WS) -> Result<WS::Window, WS::Error> {
-    #![allow(unused_variables, dead_code)]
+fn make<WS: ::trywin::WindowSystem>(ws: &WS) -> Result<WS::Window, WS::Error> {
+    use ::trywin::*;
 
     let window = ws
         .main_window()?
+        .bounds(None, Some((500, 300)))?
         .text("Hello, world!")?
         .background(Color(128, 128, 128, 0))?;
     let color1 = window
@@ -46,6 +46,7 @@ fn make<WS: WindowSystem>(ws: &WS) -> Result<WS::Window, WS::Error> {
         .bounds(Some((210, 100)), Some((200, 100)))?
         .text("Here is some text and some more and more\r\nAnother line")?; // TODO: newline translation
 
+    #[allow(dead_code)]
     struct All<WS: WindowSystem> {
         window: WS::Window,
         color1: WS::Child,
@@ -55,6 +56,7 @@ fn make<WS: WindowSystem>(ws: &WS) -> Result<WS::Window, WS::Error> {
         button2: WS::Child,
         edit: WS::Child,
     }
+    #[allow(unused_variables)]
     let all = Rc::new(All::<WS> {
         window: window.clone(),
         color1: color1.clone(),
@@ -90,6 +92,8 @@ fn make<WS: WindowSystem>(ws: &WS) -> Result<WS::Window, WS::Error> {
 }
 
 fn main() -> Result<(), Box<dyn Error>> {
+    use trywin::{comm_ctrl::System, Window, WindowSystem};
+
     let _w = make(&System)?;
     // let _w = _w.move_offscreen()?;
     let _w = _w.visible(true)?;
