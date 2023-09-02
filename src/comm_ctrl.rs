@@ -64,6 +64,7 @@ impl System {
 impl WindowSystem for System {
     type Error = Error;
     type Window = Window;
+    type Child = Window;
 
     fn main_window(&self) -> Result<Self::Window, Error> {
         unsafe {
@@ -459,8 +460,6 @@ fn edit_options(opts: EditOptions) -> WINDOW_STYLE {
 }
 
 impl crate::Window<System> for Window {
-    type Child = Self;
-
     fn system(&self) -> System {
         System::new()
     }
@@ -470,9 +469,9 @@ impl crate::Window<System> for Window {
         Ok(())
     }
 
-    fn create_child(&self, ty: ChildType) -> Result<Self::Child, Error> {
+    fn create_child(&self, ty: ChildType) -> Result<Window, Error> {
         self.check_live()?;
-        let control = |class, style| -> Result<Self::Child, Error> {
+        let control = |class, style| -> Result<Window, Error> {
             unsafe {
                 Ok(WindowImpl::new(
                     style,

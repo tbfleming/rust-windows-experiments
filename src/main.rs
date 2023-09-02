@@ -1,6 +1,7 @@
+use std::rc::Rc;
 use trywin::{
     comm_ctrl::{self, System},
-    Color, EditOptions, Window, WindowSystem,
+    ChildType, Color, EditOptions, Window, WindowSystem,
 };
 
 fn make<WS: WindowSystem>(ws: &WS) -> Result<WS::Window, WS::Error> {
@@ -11,23 +12,23 @@ fn make<WS: WindowSystem>(ws: &WS) -> Result<WS::Window, WS::Error> {
         .text("Hello, world!")?
         .background(Color(128, 128, 128, 0))?;
     let color1 = window
-        .create_child(trywin::ChildType::Custom)?
+        .create_child(ChildType::Custom)?
         .bounds(Some((10, 10)), Some((50, 50)))?
         .background(Color(127, 0, 127, 255))?;
     let color2 = window
-        .create_child(trywin::ChildType::Custom)?
+        .create_child(ChildType::Custom)?
         .bounds(Some((70, 10)), Some((50, 50)))?
         .background(Color(0, 127, 127, 255))?;
     let button1 = window
-        .create_child(trywin::ChildType::Button)?
+        .create_child(ChildType::Button)?
         .bounds(Some((100, 50)), Some((100, 40)))?
         .text("A &Button 1")?;
     let button2 = window
-        .create_child(trywin::ChildType::Button)?
+        .create_child(ChildType::Button)?
         .bounds(Some((100, 100)), Some((100, 40)))?
         .text("A &Button 2")?;
     let edit = window
-        .create_child(trywin::ChildType::Edit(EditOptions {
+        .create_child(ChildType::Edit(EditOptions {
             border: true,
             hscroll: false,
             vscroll: true,
@@ -44,13 +45,29 @@ fn make<WS: WindowSystem>(ws: &WS) -> Result<WS::Window, WS::Error> {
         .bounds(Some((210, 100)), Some((200, 100)))?
         .text("Here is some text and some more and more\r\nAnother line")?; // TODO: newline translation
 
+    struct All<WS: WindowSystem> {
+        window: WS::Window,
+        color1: WS::Child,
+        color2: WS::Child,
+        button1: WS::Child,
+        button2: WS::Child,
+        edit: WS::Child,
+    }
+    let all = Rc::new(All::<WS> {
+        window: window.clone(),
+        color1: color1.clone(),
+        color2: color2.clone(),
+        button1: button1.clone(),
+        button2: button2.clone(),
+        edit: edit.clone(),
+    });
+
     window.on_close({
-        let color1 = color1.clone();
-        let color2 = color2.clone();
+        let all = all.clone();
         move || {
             println!("xxxx colors");
-            color1.destroy().unwrap();
-            color2.destroy().unwrap();
+            all.color1.destroy().unwrap();
+            all.color2.destroy().unwrap();
         }
     })?;
 
