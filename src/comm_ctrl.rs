@@ -2,13 +2,7 @@
 #![allow(clippy::missing_safety_doc)]
 #![allow(clippy::too_many_arguments)]
 
-use std::{
-    cell::{OnceCell, RefCell},
-    marker::PhantomPinned,
-    mem::size_of,
-    pin::Pin,
-    rc::{Rc, Weak},
-};
+use std::{cell::RefCell, marker::PhantomPinned, mem::size_of, pin::Pin, rc::Rc};
 use thiserror::Error;
 use windows::{
     core,
@@ -162,17 +156,19 @@ pub type Window = Pin<Rc<WindowImpl>>;
 
 pub struct WindowImpl {
     hwnd: RefCell<HWND>,
-    this: OnceCell<Weak<WindowImpl>>,
     events: WindowEvents,
     options: RefCell<WindowOptions>,
+
+    // TODO: handle child destruction
     children: RefCell<Vec<Window>>,
+
     _pin: PhantomPinned,
 }
 
 #[derive(Default)]
 struct WindowEvents {
-    on_close: CallbackCell<dyn FnMut(&Window)>,
-    on_destroy: CallbackCell<dyn FnMut(&Window)>,
+    on_close: CallbackCell<dyn FnMut()>,
+    on_destroy: CallbackCell<dyn FnMut()>,
 }
 
 impl WindowEvents {
@@ -229,13 +225,11 @@ impl WindowImpl {
 
         let window = Rc::new(WindowImpl {
             hwnd: Default::default(),
-            this: Default::default(),
             events: Default::default(),
             options: Default::default(),
             children: Default::default(),
             _pin: PhantomPinned,
         });
-        window.this.set(Rc::downgrade(&window)).unwrap();
 
         // Side effect: static_wndproc sets window.hwnd, but not if control_class is Some.
         let hwnd = CreateWindowExW(
@@ -287,10 +281,6 @@ impl WindowImpl {
         }
     }
 
-    fn this(&self) -> Option<Window> {
-        unsafe { Some(Pin::new_unchecked(self.this.get()?.upgrade()?)) }
-    }
-
     fn live(&self) -> bool {
         *self.hwnd.borrow() != Default::default()
     }
@@ -327,7 +317,7 @@ impl WindowImpl {
 
     // safety:
     // * self.hwnd must be valid and not null
-    // * WindowImpl still exists, but we could be in drop(), so self.this() could be None.
+    // * WindowImpl still exists, but we could be in drop().
     unsafe fn wndproc(
         &self,
         subclassed: bool,
@@ -359,16 +349,12 @@ impl WindowImpl {
             }
             WM_CLOSE => {
                 println!("WM_CLOSE");
-                if let Some(this) = self.this() {
-                    self.events.on_close.with(|f| f(&this));
-                }
+                self.events.on_close.with(|f| f());
                 Some(LRESULT(0))
             }
             WM_DESTROY => {
                 println!("WM_DESTROY");
-                if let Some(this) = self.this() {
-                    self.events.on_destroy.with(|f| f(&this));
-                }
+                self.events.on_destroy.with(|f| f());
                 None
             }
             WM_NCDESTROY => {
@@ -614,12 +600,12 @@ impl crate::Window<System> for Window {
         Ok(self)
     }
 
-    fn on_close<F: FnMut(&Self) + 'static>(self, callback: F) -> Result<Self, Error> {
+    fn on_close<F: FnMut() + 'static>(&self, callback: F) -> Result<&Self, Error> {
         self.set_callback(&self.events.on_close, Box::new(callback));
         Ok(self)
     }
 
-    fn on_destroy<F: FnMut(&Self) + 'static>(self, callback: F) -> Result<Self, Error> {
+    fn on_destroy<F: FnMut() + 'static>(&self, callback: F) -> Result<&Self, Error> {
         self.set_callback(&self.events.on_destroy, Box::new(callback));
         Ok(self)
     }

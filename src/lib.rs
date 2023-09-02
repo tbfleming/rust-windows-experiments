@@ -37,7 +37,7 @@ pub struct EditOptions {
     pub want_return: bool,
 }
 
-pub trait WindowSystem: Clone {
+pub trait WindowSystem: Clone + 'static {
     type Error: std::error::Error;
     type Window: Window<Self>;
 
@@ -46,7 +46,7 @@ pub trait WindowSystem: Clone {
     fn exit_loop(&self) -> Result<(), Self::Error>;
 }
 
-pub trait Window<WS: WindowSystem>: Clone {
+pub trait Window<WS: WindowSystem>: Clone + 'static {
     type Child: Window<WS>;
 
     fn system(&self) -> WS;
@@ -63,6 +63,6 @@ pub trait Window<WS: WindowSystem>: Clone {
     fn visible(self, visible: bool) -> Result<Self, WS::Error>;
     fn redraw(self) -> Result<Self, WS::Error>;
 
-    fn on_close<F: FnMut(&Self) + 'static>(self, callback: F) -> Result<Self, WS::Error>;
-    fn on_destroy<F: FnMut(&Self) + 'static>(self, callback: F) -> Result<Self, WS::Error>;
+    fn on_close<F: FnMut() + 'static>(&self, callback: F) -> Result<&Self, WS::Error>;
+    fn on_destroy<F: FnMut() + 'static>(&self, callback: F) -> Result<&Self, WS::Error>;
 }
