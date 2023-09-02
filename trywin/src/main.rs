@@ -91,6 +91,13 @@ fn make<WS: ::trywin::WindowSystem>(ws: &WS) -> Result<WS::Window, WS::Error> {
     Ok(window)
 }
 
+fn _make2<WS2>(_ws: &WS2)
+where
+    WS2: Clone + trywin::WindowSystem,
+{
+    //
+}
+
 fn main() -> Result<(), Box<dyn Error>> {
     use trywin::{comm_ctrl::System, Window, WindowSystem};
 
