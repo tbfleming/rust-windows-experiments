@@ -492,7 +492,7 @@ impl<'event> crate::Window<'event> for Window<'event> {
         Ok(child)
     }
 
-    fn text(&self, text: &str) -> Result<&Self, Self::Error> {
+    fn text(self, text: &str) -> Result<Self, Self::Error> {
         self.check_live()?;
         unsafe {
             SetWindowTextW(self.hwnd(), WideZString::new(text).pzwstr())?;
@@ -501,10 +501,10 @@ impl<'event> crate::Window<'event> for Window<'event> {
     }
 
     fn bounds(
-        &self,
+        self,
         upper_left: Option<(i32, i32)>,
         size: Option<(i32, i32)>,
-    ) -> Result<&Self, Self::Error> {
+    ) -> Result<Self, Self::Error> {
         self.check_live()?;
         unsafe {
             let mut rect = RECT {
@@ -541,13 +541,13 @@ impl<'event> crate::Window<'event> for Window<'event> {
         }
     }
 
-    fn background(&self, color: Color) -> Result<&Self, Self::Error> {
+    fn background(self, color: Color) -> Result<Self, Self::Error> {
         self.check_live()?;
         self.options.borrow_mut().background = Some(color);
         self.redraw()
     }
 
-    fn visible(&self, visible: bool) -> Result<&Self, Self::Error> {
+    fn visible(self, visible: bool) -> Result<Self, Self::Error> {
         self.check_live()?;
         unsafe {
             ShowWindow(self.hwnd(), if visible { SW_SHOW } else { SW_HIDE });
@@ -555,7 +555,7 @@ impl<'event> crate::Window<'event> for Window<'event> {
         Ok(self)
     }
 
-    fn redraw(&self) -> Result<&Self, Self::Error> {
+    fn redraw(self) -> Result<Self, Self::Error> {
         self.check_live()?;
         unsafe {
             InvalidateRect(self.hwnd(), None, true);
@@ -563,12 +563,12 @@ impl<'event> crate::Window<'event> for Window<'event> {
         Ok(self)
     }
 
-    fn on_close<F: FnMut(&Self) + 'event>(&self, callback: F) -> Result<&Self, Self::Error> {
+    fn on_close<F: FnMut(&Self) + 'event>(self, callback: F) -> Result<Self, Self::Error> {
         self.set_callback(&self.events.on_close, Box::new(callback));
         Ok(self)
     }
 
-    fn on_destroy<F: FnMut(&Self) + 'event>(&self, callback: F) -> Result<&Self, Self::Error> {
+    fn on_destroy<F: FnMut(&Self) + 'event>(self, callback: F) -> Result<Self, Self::Error> {
         self.set_callback(&self.events.on_destroy, Box::new(callback));
         Ok(self)
     }
