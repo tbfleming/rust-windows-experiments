@@ -4,22 +4,28 @@ use syn::spanned::Spanned;
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct Position {
+    /// 1-based line number
     pub line: usize,
+
+    /// 1-based column number
     pub column: usize,
 }
 
 impl From<proc_macro2::LineColumn> for Position {
     fn from(lc: proc_macro2::LineColumn) -> Self {
         Self {
-            line: lc.line,
-            column: lc.column,
+            line: lc.line,         // proc_macro2 is 1-based
+            column: lc.column + 1, // proc_macro2 is 0-based
         }
     }
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct Span {
+    /// Inclusive
     pub start: Position,
+
+    /// Exclusive
     pub end: Position,
 }
 
@@ -59,7 +65,7 @@ impl<'a> From<&crate::Method<'a>> for Method {
         Self {
             span: Span {
                 start: m.dot.span.start().into(),
-                end: m.paren.span.close().end().into(),
+                end: m.question.span.end().into(),
             },
             name: m.ident.to_string(),
             args: m

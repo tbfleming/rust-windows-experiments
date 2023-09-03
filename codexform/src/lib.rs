@@ -106,6 +106,7 @@ struct Method<'a> {
     method_type: MethodType,
     paren: &'a syn::token::Paren,
     args: &'a syn::punctuated::Punctuated<syn::Expr, syn::token::Comma>,
+    question: &'a syn::token::Question,
 }
 
 // x.a().b().c()
@@ -119,18 +120,24 @@ impl<'a> MethodChain<'a> {
     fn new(expr: &'a syn::Expr) -> Option<Self> {
         let mut methods = Vec::new();
         let mut expr = expr;
-        while let syn::Expr::MethodCall(method_call) = expr {
-            if !method_call.attrs.is_empty() || method_call.turbofish.is_some() {
+        while let syn::Expr::Try(tr) = expr {
+            if !tr.attrs.is_empty() {
                 break;
             }
-            methods.push(Method {
-                dot: &method_call.dot_token,
-                ident: &method_call.method,
-                method_type: MethodType::from_ident(&method_call.method),
-                paren: &method_call.paren_token,
-                args: &method_call.args,
-            });
-            expr = &method_call.receiver;
+            if let syn::Expr::MethodCall(method_call) = &*tr.expr {
+                if !method_call.attrs.is_empty() || method_call.turbofish.is_some() {
+                    break;
+                }
+                methods.push(Method {
+                    dot: &method_call.dot_token,
+                    ident: &method_call.method,
+                    method_type: MethodType::from_ident(&method_call.method),
+                    paren: &method_call.paren_token,
+                    args: &method_call.args,
+                    question: &tr.question_token,
+                });
+                expr = &method_call.receiver;
+            }
         }
         if let Some(ident) = get_expr_ident(expr) {
             methods.reverse();
