@@ -1,6 +1,5 @@
 // Uses win32 API calls. Safety notes appear where
 // lifetimes get tricky.
-#![allow(clippy::missing_safety_doc)]
 #![allow(clippy::too_many_arguments)]
 
 use std::{cell::RefCell, marker::PhantomPinned, mem::size_of, pin::Pin, rc::Rc, result::Result};
@@ -19,6 +18,9 @@ use windows::{
 
 use crate::{Bitmap, ChildType, Color, EditOptions, WindowSystem};
 
+pub mod object_wrappers;
+use object_wrappers::*;
+
 #[derive(Error, Debug)]
 pub enum Error {
     #[error("{0}")]
@@ -34,6 +36,7 @@ pub enum Error {
 struct WideZString(Vec<u16>);
 
 impl WideZString {
+    // TODO: translate newlines
     fn new(s: &str) -> Self {
         Self(s.encode_utf16().chain(Some(0)).collect())
     }
@@ -46,92 +49,6 @@ impl WideZString {
 impl From<&str> for WideZString {
     fn from(s: &str) -> Self {
         Self::new(s)
-    }
-}
-
-struct HBitmap(HBITMAP);
-
-impl HBitmap {
-    fn compatible(dc: HDC, width: i32, height: i32) -> Result<Self, Error> {
-        unsafe {
-            let bm = HBitmap(CreateCompatibleBitmap(dc, width, height));
-            if bm.0 .0 == 0 {
-                Err(core::Error::from_win32())?
-            }
-            Ok(bm)
-        }
-    }
-}
-
-impl Drop for HBitmap {
-    fn drop(&mut self) {
-        unsafe {
-            DeleteObject(self.0);
-        }
-    }
-}
-
-struct WindowDC(HDC, HWND);
-
-impl WindowDC {
-    fn new(hwnd: HWND) -> Result<Self, Error> {
-        unsafe {
-            let hdc = GetDC(hwnd);
-            if hdc.0 == 0 {
-                Err(core::Error::from_win32())?
-            }
-            Ok(Self(hdc, hwnd))
-        }
-    }
-}
-
-impl Drop for WindowDC {
-    fn drop(&mut self) {
-        unsafe {
-            ReleaseDC(self.1, self.0);
-        }
-    }
-}
-
-struct MemoryDc(HDC);
-
-impl MemoryDc {
-    fn compatible(hdc: HDC) -> Result<Self, Error> {
-        unsafe {
-            let dc = MemoryDc(CreateCompatibleDC(hdc));
-            if dc.0 .0 == 0 {
-                Err(core::Error::from_win32())?
-            }
-            Ok(dc)
-        }
-    }
-}
-
-impl Drop for MemoryDc {
-    fn drop(&mut self) {
-        unsafe {
-            DeleteDC(self.0);
-        }
-    }
-}
-
-fn select_object(hdc: HDC, obj: HGDIOBJ) -> Result<UnselectObject, Error> {
-    unsafe {
-        let old = SelectObject(hdc, obj);
-        if old.0 == 0 {
-            Err(core::Error::from_win32())?
-        }
-        Ok(UnselectObject(hdc, old))
-    }
-}
-
-struct UnselectObject(HDC, HGDIOBJ);
-
-impl Drop for UnselectObject {
-    fn drop(&mut self) {
-        unsafe {
-            SelectObject(self.0, self.1);
-        }
     }
 }
 
@@ -702,23 +619,17 @@ impl crate::Window<System> for Window {
     fn snapshot(&self) -> Result<Bitmap, Error> {
         self.check_live()?;
         unsafe {
-            let hwnd = self.hwnd();
-            let mut rect = RECT {
-                left: 0,
-                top: 0,
-                right: 0,
-                bottom: 0,
-            };
-            GetWindowRect(hwnd, &mut rect)?;
-            let window_dc = WindowDC::new(hwnd)?;
-            let bm =
-                HBitmap::compatible(window_dc.0, rect.right - rect.left, rect.bottom - rect.top)?;
-            let memory_dc = MemoryDc::compatible(window_dc.0)?;
-            let sel = select_object(memory_dc.0, HGDIOBJ(bm.0 .0))?;
-            if PrintWindow(hwnd, memory_dc.0, Default::default()).0 == 0 {
-                Err(core::Error::from_win32())?;
-            }
-            drop(sel);
+            let hwnd = RawHwnd::new(self.hwnd());
+            let (_, _, w, h) = get_window_rect(&hwnd)?;
+            let window_dc = WindowDC::new(&hwnd)?;
+            let bm = HBitmap::compatible(&window_dc, w, h)?;
+            let memory_dc = MemoryDc::compatible(&window_dc)?;
+            select_object(&memory_dc, &bm.gdiobj(), || {
+                if PrintWindow(hwnd.raw(), memory_dc.raw(), Default::default()).0 == 0 {
+                    Err(core::Error::from_win32())?;
+                }
+                Ok(())
+            })?;
             let mut bmi = BITMAPINFO {
                 bmiHeader: BITMAPINFOHEADER {
                     biSize: size_of::<BITMAPINFOHEADER>() as _,
@@ -727,10 +638,10 @@ impl crate::Window<System> for Window {
                 bmiColors: Default::default(),
             };
             if GetDIBits(
-                memory_dc.0,
-                bm.0,
+                memory_dc.raw(),
+                bm.raw(),
                 0,
-                (rect.bottom - rect.top) as u32,
+                h as u32,
                 None,
                 &mut bmi,
                 DIB_RGB_COLORS,
@@ -750,10 +661,10 @@ impl crate::Window<System> for Window {
             }
             let mut bits = vec![0u32; bmi.bmiHeader.biSizeImage as usize / 4];
             if GetDIBits(
-                memory_dc.0,
-                bm.0,
+                memory_dc.raw(),
+                bm.raw(),
                 0,
-                (rect.bottom - rect.top) as u32,
+                h as u32,
                 Some(bits.as_mut_ptr() as _),
                 &mut bmi,
                 DIB_RGB_COLORS,
