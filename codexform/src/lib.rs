@@ -1,6 +1,6 @@
 #![allow(dead_code)]
 
-use std::fs::read_to_string;
+use std::collections::HashMap;
 
 fn get_type_ident(ty: &syn::Type) -> Option<&syn::Ident> {
     if let syn::Type::Path(path) = ty {
@@ -77,20 +77,7 @@ fn get_ws_arg(f: &syn::ItemFn, ws: &syn::Ident) -> Option<syn::Ident> {
     None
 }
 
-struct WSFunction<'a> {
-    f: &'a mut syn::ItemFn,
-    ws_type: syn::Ident, // Type which implements WindowSystem
-    ws_arg: syn::Ident,  // Argument of type WS (references allowed)
-}
-
-impl<'a> WSFunction<'a> {
-    fn new(f: &'a mut syn::ItemFn) -> Option<Self> {
-        let ws_type = get_ws_type(f)?;
-        let ws_arg = get_ws_arg(f, &ws_type)?;
-        Some(Self { f, ws_type, ws_arg })
-    }
-}
-
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum MethodType {
     Create,
     Attr,
@@ -155,12 +142,6 @@ impl<'a> MethodChain<'a> {
     }
 }
 
-enum Item<'a> {
-    Definition(Definition<'a>),
-    Redefinition(Redefinition<'a>),
-    Use(Use<'a>),
-}
-
 // let x = parent.create().a().b().c();
 struct Definition<'a> {
     statement: &'a syn::Stmt,
@@ -187,16 +168,118 @@ struct Use<'a> {
     methods: Vec<Method<'a>>,
 }
 
-// TODO: error type
-pub fn scan_file() -> Result<(), Box<dyn std::error::Error>> {
-    let mut ast = syn::parse_file(&read_to_string("../trywin/src/main.rs")?)?;
-    for item in ast.items.iter_mut() {
-        if let syn::Item::Fn(f) = item {
-            let Some(ws_fn) = WSFunction::new(f) else {
-                continue;
-            };
-            println!("{} {}", ws_fn.ws_type, ws_fn.ws_arg);
+enum Item<'a> {
+    Definition(Definition<'a>),
+    Redefinition(Redefinition<'a>),
+    Use(Use<'a>),
+}
+
+impl<'a> Item<'a> {
+    fn ident(&self) -> &'a syn::Ident {
+        match self {
+            Self::Definition(item) => item.ident,
+            Self::Redefinition(item) => item.ident,
+            Self::Use(item) => item.ident,
         }
     }
-    Ok(())
+}
+
+impl<'a> Item<'a> {
+    fn new(statement: &'a syn::Stmt) -> Option<Self> {
+        match statement {
+            syn::Stmt::Local(local) => {
+                let syn::Pat::Ident(ident) = &local.pat else {
+                    return None;
+                };
+                if !local.attrs.is_empty() || !ident.attrs.is_empty() || ident.subpat.is_some() {
+                    return None;
+                }
+                let ident = &ident.ident;
+                let Some(init) = &local.init else {
+                    return None;
+                };
+                if init.diverge.is_some() {
+                    return None;
+                }
+                let mut chain = MethodChain::new(&init.expr)?;
+                if chain.methods.is_empty() {
+                    return None;
+                }
+                if chain.ident != ident && chain.methods[0].method_type == MethodType::Create {
+                    let create = chain.methods.remove(0);
+                    return Some(Self::Definition(Definition {
+                        statement,
+                        local,
+                        ident,
+                        parent: chain.ident,
+                        create,
+                        methods: chain.methods,
+                    }));
+                }
+                if chain.ident == ident && chain.methods[0].method_type != MethodType::Create {
+                    return Some(Self::Redefinition(Redefinition {
+                        statement,
+                        local,
+                        ident,
+                        methods: chain.methods,
+                    }));
+                }
+                None
+            }
+            syn::Stmt::Expr(expr, _semi) => {
+                if let Some(chain) = MethodChain::new(expr) {
+                    if !chain.methods.is_empty() {
+                        return Some(Self::Use(Use {
+                            statement,
+                            expr,
+                            ident: chain.ident,
+                            methods: chain.methods,
+                        }));
+                    }
+                }
+                None
+            }
+            _ => None,
+        }
+    }
+}
+
+pub struct WSFunction<'a> {
+    f: &'a syn::ItemFn,
+    ws_type: syn::Ident, // Type which implements WindowSystem
+    ws_arg: syn::Ident,  // Argument of type WS (references allowed)
+    items: HashMap<&'a syn::Ident, Vec<Item<'a>>>,
+}
+
+impl<'a> WSFunction<'a> {
+    fn new(f: &'a syn::ItemFn) -> Option<Self> {
+        let ws_type = get_ws_type(f)?;
+        let ws_arg = get_ws_arg(f, &ws_type)?;
+        let mut items = HashMap::<&syn::Ident, Vec<_>>::new();
+        for stmt in &f.block.stmts {
+            if let Some(item) = Item::new(stmt) {
+                items.entry(item.ident()).or_default().push(item);
+            }
+        }
+        Some(Self {
+            f,
+            ws_type,
+            ws_arg,
+            items,
+        })
+    }
+}
+
+// TODO: error type
+pub fn get_functions(ast: &syn::File) -> Result<Vec<WSFunction>, Box<dyn std::error::Error>> {
+    let mut functions = Vec::new();
+    for item in ast.items.iter() {
+        if let syn::Item::Fn(f) = item {
+            if let Some(ws_fn) = WSFunction::new(f) {
+                println!("{} {}", ws_fn.ws_type, ws_fn.ws_arg);
+                functions.push(ws_fn);
+            }
+        }
+    }
+    Ok(functions)
 }
