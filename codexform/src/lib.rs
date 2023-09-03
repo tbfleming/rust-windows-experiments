@@ -1,5 +1,7 @@
 #![allow(dead_code)]
 
+pub mod serializable;
+
 use std::collections::HashMap;
 
 fn get_type_ident(ty: &syn::Type) -> Option<&syn::Ident> {
@@ -25,7 +27,7 @@ fn get_expr_ident(expr: &syn::Expr) -> Option<&syn::Ident> {
 }
 
 // Look for a generic type parameter that implements WindowSystem
-fn get_ws_type(f: &syn::ItemFn) -> Option<syn::Ident> {
+fn get_ws_type(f: &syn::ItemFn) -> Option<&syn::Ident> {
     let path1: syn::TraitBound = syn::parse_quote!(::trywin::WindowSystem);
     let path2: syn::TraitBound = syn::parse_quote!(trywin::WindowSystem);
     for gen in &f.sig.generics.params {
@@ -33,7 +35,7 @@ fn get_ws_type(f: &syn::ItemFn) -> Option<syn::Ident> {
             for bound in &t.bounds {
                 if let syn::TypeParamBound::Trait(trait_) = bound {
                     if trait_ == &path1 || trait_ == &path2 {
-                        return Some(t.ident.clone());
+                        return Some(&t.ident);
                     }
                 }
             }
@@ -46,7 +48,7 @@ fn get_ws_type(f: &syn::ItemFn) -> Option<syn::Ident> {
                     for bound in &t.bounds {
                         if let syn::TypeParamBound::Trait(trait_) = bound {
                             if trait_ == &path1 || trait_ == &path2 {
-                                return Some(ident.clone());
+                                return Some(ident);
                             }
                         }
                     }
@@ -58,7 +60,7 @@ fn get_ws_type(f: &syn::ItemFn) -> Option<syn::Ident> {
 }
 
 // Look for an argument of type WS (references allowed)
-fn get_ws_arg(f: &syn::ItemFn, ws: &syn::Ident) -> Option<syn::Ident> {
+fn get_ws_arg<'a>(f: &'a syn::ItemFn, ws: &'a syn::Ident) -> Option<&'a syn::Ident> {
     for arg in &f.sig.inputs {
         if let syn::FnArg::Typed(t) = arg {
             let mut ty = &*t.ty;
@@ -68,7 +70,7 @@ fn get_ws_arg(f: &syn::ItemFn, ws: &syn::Ident) -> Option<syn::Ident> {
             if let Some(ident) = get_type_ident(ty) {
                 if ident == ws {
                     if let syn::Pat::Ident(pat) = &*t.pat {
-                        return Some(pat.ident.clone());
+                        return Some(&pat.ident);
                     }
                 }
             }
@@ -244,17 +246,18 @@ impl<'a> Item<'a> {
     }
 }
 
-pub struct WSFunction<'a> {
+pub struct Function<'a> {
     f: &'a syn::ItemFn,
-    ws_type: syn::Ident, // Type which implements WindowSystem
-    ws_arg: syn::Ident,  // Argument of type WS (references allowed)
+    ident: &'a syn::Ident,
+    ws_type: &'a syn::Ident, // Type which implements WindowSystem
+    ws_arg: &'a syn::Ident,  // Argument of type WS (references allowed)
     items: HashMap<&'a syn::Ident, Vec<Item<'a>>>,
 }
 
-impl<'a> WSFunction<'a> {
+impl<'a> Function<'a> {
     fn new(f: &'a syn::ItemFn) -> Option<Self> {
         let ws_type = get_ws_type(f)?;
-        let ws_arg = get_ws_arg(f, &ws_type)?;
+        let ws_arg = get_ws_arg(f, ws_type)?;
         let mut items = HashMap::<&syn::Ident, Vec<_>>::new();
         for stmt in &f.block.stmts {
             if let Some(item) = Item::new(stmt) {
@@ -263,6 +266,7 @@ impl<'a> WSFunction<'a> {
         }
         Some(Self {
             f,
+            ident: &f.sig.ident,
             ws_type,
             ws_arg,
             items,
@@ -271,11 +275,11 @@ impl<'a> WSFunction<'a> {
 }
 
 // TODO: error type
-pub fn get_functions(ast: &syn::File) -> Result<Vec<WSFunction>, Box<dyn std::error::Error>> {
+pub fn get_functions(ast: &syn::File) -> Result<Vec<Function>, Box<dyn std::error::Error>> {
     let mut functions = Vec::new();
     for item in ast.items.iter() {
         if let syn::Item::Fn(f) = item {
-            if let Some(ws_fn) = WSFunction::new(f) {
+            if let Some(ws_fn) = Function::new(f) {
                 println!("{} {}", ws_fn.ws_type, ws_fn.ws_arg);
                 functions.push(ws_fn);
             }
