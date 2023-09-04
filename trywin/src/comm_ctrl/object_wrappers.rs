@@ -12,6 +12,7 @@ use std::{
     rc::Rc,
     result::Result,
 };
+use thiserror::Error;
 use windows::{
     core,
     core::*,
@@ -23,7 +24,19 @@ use windows::{
     },
 };
 
-use super::Error;
+use crate::Color;
+
+#[derive(Error, Debug)]
+pub enum Error {
+    #[error("{0}")]
+    Windows(#[from] core::Error),
+
+    #[error("Window has been destroyed")]
+    Destroyed,
+
+    #[error("Unsupported bitmap format")]
+    UnsupportedBitmapFormat,
+}
 
 pub struct WideZString(Vec<u16>);
 
@@ -178,23 +191,8 @@ mod created_window {
 
         /// # Safety
         ///
-        /// Caller must ensure that `hwnd` is either valid or null.
-        /// If it is null, then caller may set it to non-null at
-        /// a later time. If `hwnd` is ever destroyed, then caller
-        /// must set `hwnd` to null. Once it has been null a second
-        /// time, it must never be non-null again. `[StaticWndprocState]`
-        /// fulfills these requirements.
-        ///
-        /// `OwnedWindow`'s drop handler calls `[DestroyWindow]`
-        /// on `hwnd` when it is not null.
-        pub unsafe fn from_hwnd(hwnd: Rc<Cell<HWND>>) -> Self {
-            Self(hwnd)
-        }
-
-        /// # Safety
-        ///
-        /// * All calls return the same handle, except that it may progress
-        ///   through the sequence null -> valid -> null.
+        /// * All calls return the same handle, or null if it
+        ///   has been destroyed.
         /// * Callers must not use hwnd after it is destroyed.
         /// * Callers may destroy hwnd.
         pub unsafe fn hwnd(&self) -> HWND {
@@ -380,7 +378,7 @@ pub mod window_proc {
             let p = AssertUnwindSafe(p);
             move || {
                 (**p).window_proc.wndproc(
-                    false,
+                    true,
                     handle,
                     message,
                     wparam,
@@ -423,6 +421,19 @@ pub fn get_window_rect(hwnd: &impl Raw<HWND>) -> Result<(i32, i32, i32, i32), Er
     ))
 }
 
+/// (x, y, w, h)
+pub fn get_client_rect(hwnd: &impl Raw<HWND>) -> Result<(i32, i32, i32, i32), Error> {
+    let mut rect = RECT::default();
+    // Safety: raw() ensures hwnd is valid
+    unsafe { GetClientRect(hwnd.raw(), &mut rect)? }
+    Ok((
+        rect.left,
+        rect.top,
+        rect.right - rect.left,
+        rect.bottom - rect.top,
+    ))
+}
+
 mod window_dc {
     use super::*;
     pub struct WindowDC<'a, Hwnd: Raw<HWND>>(HDC, &'a Hwnd);
@@ -456,6 +467,40 @@ mod window_dc {
     }
 }
 pub use window_dc::WindowDC;
+
+mod paint_dc {
+    use super::*;
+
+    pub struct PaintDC<'a, Hwnd: Raw<HWND>>(HDC, &'a Hwnd);
+
+    impl<'a, Hwnd: Raw<HWND>> PaintDC<'a, Hwnd> {
+        pub fn new(hwnd: &'a Hwnd) -> Result<Self, Error> {
+            // Safety: Self holds a ref to Hwnd, ensuring its lifetime
+            let hdc = unsafe { BeginPaint(hwnd.raw(), &mut PAINTSTRUCT::default()) };
+            if hdc.0 == 0 {
+                Err(core::Error::from_win32())?
+            }
+            Ok(Self(hdc, hwnd))
+        }
+    }
+
+    impl<'a, Hwnd: Raw<HWND>> Drop for PaintDC<'a, Hwnd> {
+        fn drop(&mut self) {
+            // Safety: HDC::raw() ensures HWND is valid and unchanged
+            unsafe {
+                EndPaint(self.1.raw(), &PAINTSTRUCT::default());
+            }
+        }
+    }
+
+    impl<'a, Hwnd: Raw<HWND>> Raw<HDC> for PaintDC<'a, Hwnd> {
+        // Safety: see Raw::raw()
+        unsafe fn raw(&self) -> HDC {
+            self.0
+        }
+    }
+}
+pub use paint_dc::PaintDC;
 
 mod memory_dc {
     use super::*;
@@ -583,3 +628,64 @@ mod hbitmap {
     }
 }
 pub use hbitmap::HBitmap;
+
+mod hbrush {
+    use super::*;
+
+    pub struct HBrush(HBRUSH);
+
+    impl HBrush {
+        pub fn solid(color: Color) -> Result<Self, Error> {
+            // Safety: we ensure HBRUSH is valid.
+            let brush = unsafe {
+                HBrush(CreateSolidBrush(COLORREF(
+                    (color.0 as u32) | ((color.1 as u32) << 8) | ((color.2 as u32) << 16),
+                )))
+            };
+            if brush.0 .0 == 0 {
+                Err(core::Error::from_win32())?
+            }
+            Ok(brush)
+        }
+    }
+
+    impl Drop for HBrush {
+        fn drop(&mut self) {
+            // Safety: we ensure HBRUSH is valid.
+            unsafe {
+                DeleteObject(self.0);
+            }
+        }
+    }
+
+    impl Raw<HBRUSH> for HBrush {
+        // Safety: see Raw::raw()
+        unsafe fn raw(&self) -> HBRUSH {
+            self.0
+        }
+    }
+}
+pub use hbrush::*;
+
+pub fn fill_rect<'a, DC: Raw<HDC>, Brush: Raw<HBRUSH>>(
+    dc: &'a DC,
+    brush: &'a Brush,
+    x: i32,
+    y: i32,
+    w: i32,
+    h: i32,
+) {
+    // Safety: dc.raw() and brush.raw() ensure HDC and HBRUSH are valid.
+    unsafe {
+        FillRect(
+            dc.raw(),
+            &RECT {
+                left: x,
+                top: y,
+                right: x + w,
+                bottom: y + h,
+            },
+            brush.raw(),
+        );
+    }
+}

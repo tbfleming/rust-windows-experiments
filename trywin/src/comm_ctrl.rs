@@ -1,37 +1,16 @@
-// Uses win32 API calls. Safety notes appear where
-// lifetimes get tricky.
 #![allow(clippy::too_many_arguments)]
 
-use std::{cell::RefCell, marker::PhantomPinned, mem::size_of, pin::Pin, rc::Rc, result::Result};
-use thiserror::Error;
+use std::{cell::RefCell, mem::size_of, rc::Rc, result::Result};
 use windows::{
     core,
-    core::*,
-    Win32::{
-        Foundation::*, Graphics::Gdi::*, System::LibraryLoader::*, UI::WindowsAndMessaging::*,
-    },
-    Win32::{
-        Storage::Xps::*,
-        UI::{Controls::*, Shell::*},
-    },
+    Win32::Storage::Xps::*,
+    Win32::{Foundation::*, Graphics::Gdi::*, UI::WindowsAndMessaging::*},
 };
 
 use crate::{Bitmap, ChildType, Color, EditOptions, WindowSystem};
 
 pub mod object_wrappers;
-use object_wrappers::*;
-
-#[derive(Error, Debug)]
-pub enum Error {
-    #[error("{0}")]
-    Windows(#[from] core::Error),
-
-    #[error("Window has been destroyed")]
-    Destroyed,
-
-    #[error("Unsupported bitmap format")]
-    UnsupportedBitmapFormat,
-}
+use object_wrappers::{Error, *};
 
 #[derive(Clone, Debug, Default)]
 pub struct System;
@@ -66,8 +45,8 @@ impl WindowSystem for System {
     fn event_loop(&self) -> Result<(), Error> {
         unsafe {
             let mut msg = MSG::default();
-            while GetMessageA(&mut msg, HWND(0), 0, 0).into() {
-                DispatchMessageA(&msg);
+            while GetMessageW(&mut msg, HWND(0), 0, 0).into() {
+                DispatchMessageW(&msg);
             }
             Ok(())
         }
@@ -135,30 +114,21 @@ impl<'a, F: ?Sized> Drop for CallbackRef<'a, F> {
     }
 }
 
-pub type Window = Pin<Rc<WindowImpl>>;
+pub type Window = Rc<WindowImpl>;
 
 pub struct WindowImpl {
-    hwnd: RefCell<HWND>,
-    events: WindowEvents,
-    options: RefCell<WindowOptions>,
-
-    // TODO: handle child destruction
-    children: RefCell<Vec<Window>>,
-
-    _pin: PhantomPinned,
+    hwnd: CreatedWindow,
+    callbacks: Rc<Callbacks>,
 }
 
 #[derive(Default)]
-struct WindowEvents {
+struct Callbacks {
+    options: RefCell<WindowOptions>,
     on_close: CallbackCell<dyn FnMut()>,
     on_destroy: CallbackCell<dyn FnMut()>,
-}
 
-impl WindowEvents {
-    fn clear(&self) {
-        self.on_close.set(None);
-        self.on_destroy.set(None);
-    }
+    // TODO: remove destroyed children from this list
+    children: RefCell<Vec<Window>>,
 }
 
 #[derive(Default)]
@@ -176,85 +146,26 @@ impl WindowImpl {
         y: Option<i32>,
         w: Option<i32>,
         h: Option<i32>,
-    ) -> core::Result<Pin<Rc<Self>>> {
-        let instance = GetModuleHandleA(None)?;
-
-        if control_class.is_some() {
-            InitCommonControlsEx(&INITCOMMONCONTROLSEX {
-                dwSize: size_of::<INITCOMMONCONTROLSEX>() as u32,
-                dwICC: ICC_STANDARD_CLASSES,
-            });
-        } else if GetClassInfoExW(instance, w!("general_window"), &mut WNDCLASSEXW::default())
-            .is_err()
-        {
-            let atom = RegisterClassExW(&WNDCLASSEXW {
-                cbSize: size_of::<WNDCLASSEXW>() as u32,
-                style: CS_HREDRAW | CS_VREDRAW,
-                lpfnWndProc: Some(WindowImpl::static_wndproc),
-                cbClsExtra: 0,
-                cbWndExtra: 0,
-                hInstance: instance.into(),
-                hIcon: Default::default(),
-                hCursor: Default::default(),
-                hbrBackground: Default::default(),
-                lpszMenuName: PCWSTR::null(),
-                lpszClassName: w!("general_window"),
-                hIconSm: Default::default(),
-            });
-            if atom == 0 {
-                return Err(core::Error::from_win32());
-            }
-        }
-
-        let window = Rc::new(WindowImpl {
-            hwnd: Default::default(),
-            events: Default::default(),
-            options: Default::default(),
-            children: Default::default(),
-            _pin: PhantomPinned,
-        });
-
-        // Side effect: static_wndproc sets window.hwnd, but not if control_class is Some.
-        let hwnd = CreateWindowExW(
-            window_ex_style,
-            WideZString::new(if let Some(cls) = control_class {
-                cls
-            } else {
-                "general_window"
-            })
-            .pzwstr(),
-            w!(""),
+    ) -> core::Result<Rc<Self>> {
+        let callbacks = Rc::new(Callbacks::default());
+        let hwnd = CreatedWindow::new(
+            callbacks.clone(),
+            "",
             window_style,
-            x.unwrap_or(CW_USEDEFAULT),
-            y.unwrap_or(CW_USEDEFAULT),
-            w.unwrap_or(CW_USEDEFAULT),
-            h.unwrap_or(CW_USEDEFAULT),
+            window_ex_style,
             parent,
-            None,
-            instance,
-            Some(&*window as *const _ as _),
-        );
-        if hwnd == Default::default() {
-            return Err(core::Error::from_win32());
-        }
-
-        if control_class.is_some() {
-            window.hwnd.replace(hwnd);
-            SetWindowSubclass(
-                hwnd,
-                Some(WindowImpl::static_subclass_wndproc),
-                0,
-                &*window as *const _ as _,
-            );
-        }
-
-        Ok(Pin::new_unchecked(window))
+            control_class,
+            x,
+            y,
+            w,
+            h,
+        )?;
+        Ok(Rc::new(Self { hwnd, callbacks }))
     }
 
     fn destroy(&self) -> core::Result<()> {
         unsafe {
-            let handle = self.hwnd();
-            // println!("drop handle: {:?}", handle);
+            let handle = self.hwnd.hwnd();
             if handle != Default::default() {
                 // wndproc will set self.hwnd to null
                 DestroyWindow(handle)
@@ -265,7 +176,7 @@ impl WindowImpl {
     }
 
     fn live(&self) -> bool {
-        *self.hwnd.borrow() != Default::default()
+        unsafe { self.hwnd.hwnd() != HWND(0) }
     }
 
     fn check_live(&self) -> Result<(), Error> {
@@ -292,125 +203,10 @@ impl WindowImpl {
     ///
     /// # Safety
     ///
-    /// Caller must not destroy use handle after it's been destroyed. It is OK to call
+    /// Caller must not use handle after it's been destroyed. It is OK to call
     /// [DestroyWindow].
     pub unsafe fn hwnd(&self) -> HWND {
-        *self.hwnd.borrow()
-    }
-
-    // safety:
-    // * self.hwnd must be valid and not null
-    // * WindowImpl still exists, but we could be in drop().
-    unsafe fn wndproc(
-        &self,
-        subclassed: bool,
-        message: u32,
-        _wparam: WPARAM,
-        _lparam: LPARAM,
-    ) -> Option<LRESULT> {
-        // println!("message: {}", message);
-        match message {
-            WM_PAINT => {
-                if subclassed {
-                    return None;
-                }
-                // println!("WM_PAINT");
-                let mut ps = PAINTSTRUCT::default();
-                let hdc = BeginPaint(self.hwnd(), &mut ps);
-                if let Some(color) = self.options.borrow().background {
-                    let brush = CreateSolidBrush(COLORREF(
-                        (color.0 as u32) | ((color.1 as u32) << 8) | ((color.2 as u32) << 16),
-                    ));
-                    let mut rect = Default::default();
-                    if GetClientRect(self.hwnd(), &mut rect).is_ok() {
-                        FillRect(hdc, &rect, brush);
-                    }
-                    DeleteObject(brush);
-                }
-                EndPaint(self.hwnd(), &ps);
-                Some(LRESULT(0))
-            }
-            WM_CLOSE => {
-                // println!("WM_CLOSE");
-                self.events.on_close.with(|f| f());
-                Some(LRESULT(0))
-            }
-            WM_DESTROY => {
-                // println!("WM_DESTROY");
-                self.events.on_destroy.with(|f| f());
-                None
-            }
-            WM_NCDESTROY => {
-                // println!("WM_NCDESTROY");
-                *self.hwnd.borrow_mut() = Default::default();
-                self.children.borrow_mut().clear();
-                self.events.clear(); // Clean up any callbacks that hold a circular Rc to us
-                None
-            }
-            _ => None,
-        }
-    }
-
-    // Safety:
-    // * CREATESTRUCTW::lpCreateParams must point to the owning Window instance.
-    // * GWLP_USERDATA must either be null or point to the owning Window instance.
-    // * Windows message loops only call this in the same thread that called
-    //   CreateWindowExW, no matter what other threads do to the handle.
-    unsafe extern "system" fn static_wndproc(
-        handle: HWND,
-        message: u32,
-        wparam: WPARAM,
-        lparam: LPARAM,
-    ) -> LRESULT {
-        // println!("message: {}", message);
-        let window;
-        if message == WM_NCCREATE {
-            // This is almost the first message received by the window. CreateWindowExW
-            // hasn't returned yet, so we're responsible for setting window.hwnd.
-            // Hopefully we'll never need to handle WM_GETMINMAXINFO, which comes first,
-            // since I don't want to thunk wndproc.
-            // println!("WM_NCCREATE");
-            let cs = &*(lparam.0 as *const CREATESTRUCTW);
-            window = cs.lpCreateParams as *const WindowImpl;
-            (*window).hwnd.replace(handle);
-            SetWindowLongPtrW(handle, GWLP_USERDATA, cs.lpCreateParams as isize);
-        } else {
-            window = GetWindowLongPtrW(handle, GWLP_USERDATA) as *const WindowImpl;
-        }
-        // println!("window: {:?}", window);
-        if window.is_null() {
-            // println!("window == null");
-            DefWindowProcW(handle, message, wparam, lparam)
-        } else {
-            (*window)
-                .wndproc(false, message, wparam, lparam)
-                .unwrap_or_else(|| DefWindowProcW(handle, message, wparam, lparam))
-        }
-    }
-
-    // Safety:
-    // * dwrefdata must point to the owning Window instance.
-    // * Windows message loops only call this in the same thread that called
-    //   CreateWindowExW, no matter what other threads do to the handle.
-    unsafe extern "system" fn static_subclass_wndproc(
-        handle: HWND,
-        message: u32,
-        wparam: WPARAM,
-        lparam: LPARAM,
-        _uidsubclass: usize,
-        dwrefdata: usize,
-    ) -> LRESULT {
-        // println!("message: {}", message);
-        let window = dwrefdata as *const WindowImpl;
-        // println!("control window: {:?}", window);
-        if window.is_null() {
-            // println!("window == null");
-            DefSubclassProc(handle, message, wparam, lparam)
-        } else {
-            (*window)
-                .wndproc(true, message, wparam, lparam)
-                .unwrap_or_else(|| DefSubclassProc(handle, message, wparam, lparam))
-        }
+        self.hwnd.hwnd()
     }
 }
 
@@ -420,6 +216,70 @@ impl Drop for WindowImpl {
             eprintln!("Window::destroy failed in drop handler: {:?}", e);
         }
         // println!("drop WindowImpl");
+    }
+}
+
+impl Callbacks {
+    fn wndproc_impl<'a>(
+        &'a self,
+        commctrl: bool,
+        hwnd: HWND,
+        message: u32,
+        wparam: WPARAM,
+        lparam: LPARAM,
+        default: impl FnOnce(HWND, u32, WPARAM, LPARAM) -> LRESULT + 'a,
+    ) -> LRESULT {
+        // Safety: hwnd is valid until we call any user-provided callbacks
+        let raw_hwnd = unsafe { RawHwnd::new(hwnd) };
+
+        match message {
+            WM_PAINT => {
+                if commctrl {
+                    return default(hwnd, message, wparam, lparam);
+                }
+                // println!("WM_PAINT");
+                if let Ok(hdc) = PaintDC::new(&raw_hwnd) {
+                    if let Some(color) = self.options.borrow().background {
+                        if let Ok(brush) = HBrush::solid(color) {
+                            if let Ok((x, y, w, h)) = get_client_rect(&raw_hwnd) {
+                                fill_rect(&hdc, &brush, x, y, w, h);
+                            }
+                        }
+                    }
+                }
+                LRESULT(0)
+            }
+            WM_CLOSE => {
+                // println!("WM_CLOSE");
+                self.on_close.with(|f| f());
+                LRESULT(0)
+            }
+            WM_DESTROY => {
+                // println!("WM_DESTROY");
+                self.on_destroy.with(|f| f());
+                default(hwnd, message, wparam, lparam)
+            }
+            WM_NCDESTROY => {
+                // println!("WM_NCDESTROY");
+                self.children.borrow_mut().clear();
+                default(hwnd, message, wparam, lparam)
+            }
+            _ => default(hwnd, message, wparam, lparam),
+        }
+    }
+}
+
+impl WindowProc for Rc<Callbacks> {
+    unsafe fn wndproc<'a>(
+        &'a self,
+        commctrl: bool,
+        hwnd: HWND,
+        message: u32,
+        wparam: WPARAM,
+        lparam: LPARAM,
+        default: impl FnOnce(HWND, u32, WPARAM, LPARAM) -> LRESULT + 'a,
+    ) -> LRESULT {
+        self.wndproc_impl(commctrl, hwnd, message, wparam, lparam, default)
     }
 }
 
@@ -506,7 +366,7 @@ impl crate::Window<System> for Window {
             )?,
             ChildType::Edit(opts) => control("EDIT", WS_VISIBLE | WS_CHILD | edit_options(opts))?,
         };
-        self.children.borrow_mut().push(child.clone());
+        self.callbacks.children.borrow_mut().push(child.clone());
         Ok(child)
     }
 
@@ -561,7 +421,7 @@ impl crate::Window<System> for Window {
 
     fn background(self, color: Color) -> Result<Self, Error> {
         self.check_live()?;
-        self.options.borrow_mut().background = Some(color);
+        self.callbacks.options.borrow_mut().background = Some(color);
         self.redraw()
     }
 
@@ -668,12 +528,12 @@ impl crate::Window<System> for Window {
     }
 
     fn on_close<F: FnMut() + 'static>(&self, callback: F) -> Result<&Self, Error> {
-        self.set_callback(&self.events.on_close, Box::new(callback));
+        self.set_callback(&self.callbacks.on_close, Box::new(callback));
         Ok(self)
     }
 
     fn on_destroy<F: FnMut() + 'static>(&self, callback: F) -> Result<&Self, Error> {
-        self.set_callback(&self.events.on_destroy, Box::new(callback));
+        self.set_callback(&self.callbacks.on_destroy, Box::new(callback));
         Ok(self)
     }
 }
