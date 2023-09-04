@@ -7,6 +7,7 @@ use std::{
     cell::Cell,
     panic::{catch_unwind, AssertUnwindSafe},
     process::abort,
+    rc::Rc,
 };
 use windows::{
     core,
@@ -53,45 +54,59 @@ mod raw_hwnd {
 }
 pub use raw_hwnd::RawHwnd;
 
-mod owned_window {
+mod created_window {
     use super::*;
 
-    pub struct OwnedWindow(HWND);
+    pub struct CreatedWindow(Rc<Cell<HWND>>);
 
-    impl OwnedWindow {
+    impl CreatedWindow {
         /// # Safety
         ///
-        /// Caller must ensure that hwnd is valid and not null.
-        /// This takes ownership and will destroy the window
-        /// when it is dropped using `[DestroyWindow]`.
-        pub unsafe fn new(hwnd: HWND) -> Self {
+        /// Caller must ensure that `hwnd` is either valid or null.
+        /// If it is null, then caller may set it to non-null at
+        /// a later time. If `hwnd` is ever destroyed, then caller
+        /// must set `hwnd` to null. Once it has been null a second
+        /// time, it must never be non-null again. `[StaticWndprocState]`
+        /// fulfills these requirements.
+        ///
+        /// `OwnedWindow`'s drop handler calls `[DestroyWindow]`
+        /// on `hwnd` when it is not null.
+        pub unsafe fn new(hwnd: Rc<Cell<HWND>>) -> Self {
             Self(hwnd)
         }
-    }
 
-    impl Raw<HWND> for OwnedWindow {
-        // Safety: see Raw::raw()
-        unsafe fn raw(&self) -> HWND {
-            self.0
+        /// # Safety
+        ///
+        /// * All calls return the same handle, except that it may progress
+        ///   through the sequence null -> valid -> null.
+        /// * Callers must not use hwnd after it is destroyed.
+        /// * Callers may destroy hwnd.
+        pub unsafe fn hwnd(&self) -> HWND {
+            self.0.get()
         }
     }
 
-    impl Drop for OwnedWindow {
+    impl Drop for CreatedWindow {
         fn drop(&mut self) {
-            // Safety: self.0 is valid
-            unsafe {
-                let _ = DestroyWindow(self.0);
+            let hwnd = self.0.get();
+            if hwnd != HWND(0) {
+                // Safety: self.0 is valid. Caller of OwnedWindow::new
+                //         is responsible for setting hwnd to null.
+                unsafe {
+                    let _ = DestroyWindow(hwnd);
+                }
             }
         }
     }
 }
-pub use owned_window::*;
+pub use created_window::*;
 
 pub mod window_proc {
     use super::*;
 
     pub trait WindowProc {
-        /// Safety:
+        /// # Safety
+        ///
         /// * Caller is a window procedure that is currently handling a message.
         ///   It is running in the same thread which created the HWND.
         /// * Caller is providing a valid message.
@@ -117,21 +132,34 @@ pub mod window_proc {
 
     pub struct StaticWndprocState<T> {
         window_proc: T,
+        hwnd: Rc<Cell<HWND>>,
         entry_count: Cell<u32>,
         destroy_this: Cell<bool>,
     }
 
-    impl<T> From<T> for StaticWndprocState<T> {
-        fn from(window_proc: T) -> Self {
+    impl<T> StaticWndprocState<T> {
+        /// # Safety
+        ///
+        /// * Caller must ensure that `hwnd` is either valid or null.
+        ///   If it is not null, then it must be the same HWND that will be
+        ///   passed to `static_wndproc` or `static_subclass_wndproc`.
+        /// * Caller ensures that it will never change `hwnd`.
+        /// * If `static_wndproc` is used, then it will set `hwnd` while
+        ///   processing `WM_NCCREATE`, unless `hwnd` is already non-null.
+        /// * Both `static_wndproc` and `static_subclass_wndproc` will
+        ///   set it to null while processing `WM_NCDESTROY`.
+        pub unsafe fn new(hwnd: Rc<Cell<HWND>>, window_proc: T) -> Self {
             Self {
                 window_proc,
+                hwnd,
                 entry_count: Cell::new(0),
                 destroy_this: Cell::new(false),
             }
         }
     }
 
-    /// Safety:
+    /// # Safety
+    ///
     /// * Let `p` be a `*mut StaticWndprocState<T>` obtained from
     ///   `[Box::into_raw]`. `static_wndproc` owns `p` and will eventually
     ///   release it using `drop(Box::from_raw(p))`. `[Box::into_raw]` must
@@ -153,6 +181,10 @@ pub mod window_proc {
             p = (*(lparam.0 as *const CREATESTRUCTW)).lpCreateParams
                 as *const StaticWndprocState<T>;
             SetWindowLongPtrW(handle, GWLP_USERDATA, p as isize);
+            // Safety: hwnd never changes once set, except back to null.
+            if (*p).hwnd.get() == HWND(0) {
+                (*p).hwnd.set(handle);
+            }
         } else {
             p = GetWindowLongPtrW(handle, GWLP_USERDATA) as *const StaticWndprocState<T>;
             if p.is_null() {
@@ -185,6 +217,7 @@ pub mod window_proc {
             // Schedule p destruction and prevent further calls to wndproc
             (*p).destroy_this.set(true);
             SetWindowLongPtrW(handle, GWLP_USERDATA, 0);
+            (*p).hwnd.set(HWND(0));
         }
 
         // Track recursion depth
@@ -198,7 +231,8 @@ pub mod window_proc {
         res.unwrap_or(LRESULT(0))
     }
 
-    /// Safety:
+    /// # Safety
+    ///
     /// * Must be registered as subclass 0.
     /// * Let `p` be a `*mut StaticWndprocState<T>` obtained from
     ///   `[Box::into_raw]`. `static_subclass_wndproc` owns `p` and will eventually
@@ -243,6 +277,7 @@ pub mod window_proc {
             // Schedule p destruction and prevent further calls to wndproc
             (*p).destroy_this.set(true);
             RemoveWindowSubclass(handle, Some(static_subclass_wndproc::<T>), 0);
+            (*p).hwnd.set(HWND(0));
         }
 
         // Track recursion depth
