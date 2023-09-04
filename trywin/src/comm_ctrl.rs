@@ -12,6 +12,9 @@ use crate::{Bitmap, ChildType, Color, EditOptions, WindowSystem};
 pub mod object_wrappers;
 use object_wrappers::{Error, *};
 
+pub mod wndproc_wrappers;
+use wndproc_wrappers::*;
+
 #[derive(Clone, Debug, Default)]
 pub struct System;
 
@@ -28,7 +31,7 @@ impl WindowSystem for System {
 
     fn new_main(&self) -> Result<Self::Window, Error> {
         unsafe {
-            Ok(WindowImpl::new(
+            WindowImpl::new(
                 WS_OVERLAPPEDWINDOW | WS_CLIPCHILDREN,
                 WS_EX_OVERLAPPEDWINDOW | WS_EX_CONTROLPARENT,
                 HWND(0),
@@ -37,7 +40,7 @@ impl WindowSystem for System {
                 None,
                 None,
                 None,
-            )?)
+            )
         }
     }
 
@@ -146,7 +149,7 @@ impl WindowImpl {
         y: Option<i32>,
         w: Option<i32>,
         h: Option<i32>,
-    ) -> core::Result<Rc<Self>> {
+    ) -> Result<Rc<Self>, Error> {
         let callbacks = Rc::new(Callbacks::default());
         let hwnd = CreatedWindow::new(
             callbacks.clone(),
@@ -163,15 +166,14 @@ impl WindowImpl {
         Ok(Rc::new(Self { hwnd, callbacks }))
     }
 
-    fn destroy(&self) -> core::Result<()> {
+    fn destroy(&self) -> Result<(), Error> {
         unsafe {
             let handle = self.hwnd.hwnd();
             if handle != Default::default() {
                 // wndproc will set self.hwnd to null
-                DestroyWindow(handle)
-            } else {
-                Ok(())
+                DestroyWindow(handle)?;
             }
+            Ok(())
         }
     }
 
@@ -315,7 +317,7 @@ impl crate::Window<System> for Window {
         self.check_live()?;
         let control = |class, style| -> Result<Window, Error> {
             unsafe {
-                Ok(WindowImpl::new(
+                WindowImpl::new(
                     style,
                     Default::default(),
                     self.hwnd(),
@@ -324,7 +326,7 @@ impl crate::Window<System> for Window {
                     None,
                     None,
                     None,
-                )?)
+                )
             }
         };
         let child = match ty {
