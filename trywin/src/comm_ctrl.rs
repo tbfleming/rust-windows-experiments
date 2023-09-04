@@ -33,25 +33,6 @@ pub enum Error {
     UnsupportedBitmapFormat,
 }
 
-struct WideZString(Vec<u16>);
-
-impl WideZString {
-    // TODO: translate newlines
-    fn new(s: &str) -> Self {
-        Self(s.encode_utf16().chain(Some(0)).collect())
-    }
-
-    fn pzwstr(&self) -> PCWSTR {
-        PCWSTR(self.0.as_ptr())
-    }
-}
-
-impl From<&str> for WideZString {
-    fn from(s: &str) -> Self {
-        Self::new(s)
-    }
-}
-
 #[derive(Clone, Debug, Default)]
 pub struct System;
 
