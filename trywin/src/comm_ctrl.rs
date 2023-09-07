@@ -222,14 +222,14 @@ impl Drop for WindowImpl {
 }
 
 impl Callbacks {
-    fn wndproc_impl<'a>(
-        &'a self,
+    fn wndproc_impl(
+        &self,
         commctrl: bool,
         hwnd: HWND,
         message: u32,
         wparam: WPARAM,
         lparam: LPARAM,
-        default: impl FnOnce(HWND, u32, WPARAM, LPARAM) -> LRESULT + 'a,
+        default: fn(HWND, u32, WPARAM, LPARAM) -> LRESULT,
     ) -> LRESULT {
         // Safety: hwnd is valid until we call any user-provided callbacks
         let raw_hwnd = unsafe { RawHwnd::new(hwnd) };
@@ -272,14 +272,14 @@ impl Callbacks {
 }
 
 impl WindowProc for Rc<Callbacks> {
-    unsafe fn wndproc<'a>(
-        &'a self,
+    unsafe fn wndproc(
+        &self,
         commctrl: bool,
         hwnd: HWND,
         message: u32,
         wparam: WPARAM,
         lparam: LPARAM,
-        default: impl FnOnce(HWND, u32, WPARAM, LPARAM) -> LRESULT + 'a,
+        default: fn(HWND, u32, WPARAM, LPARAM) -> LRESULT,
     ) -> LRESULT {
         self.wndproc_impl(commctrl, hwnd, message, wparam, lparam, default)
     }

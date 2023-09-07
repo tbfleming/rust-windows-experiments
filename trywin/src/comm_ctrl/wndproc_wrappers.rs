@@ -59,7 +59,7 @@ mod created_window {
                 let atom = RegisterClassExW(&WNDCLASSEXW {
                     cbSize: size_of::<WNDCLASSEXW>() as u32,
                     style: CS_HREDRAW | CS_VREDRAW,
-                    lpfnWndProc: Some(static_wndproc::<T>),
+                    lpfnWndProc: Some(static_wndproc),
                     cbClsExtra: 0,
                     cbWndExtra: 0,
                     hInstance: instance.into(),
@@ -109,7 +109,7 @@ mod created_window {
                 hwnd.replace(created_hwnd);
                 SetWindowSubclass(
                     created_hwnd,
-                    Some(static_subclass_wndproc::<T>),
+                    Some(static_subclass_wndproc),
                     0,
                     state.take().unwrap() as usize,
                 );
@@ -162,25 +162,25 @@ pub mod window_proc {
         ///   may destroy the HWND directly or indirectly, e.g. by destroying
         ///   a parent HWND. Both caller and implementer need to safely handle this.
         /// * Caller must not pass an invalid HWND to `default`.
-        unsafe fn wndproc<'a>(
-            &'a self,
+        unsafe fn wndproc(
+            &self,
             commctrl: bool,
             hwnd: HWND,
             message: u32,
             wparam: WPARAM,
             lparam: LPARAM,
-            default: impl FnOnce(HWND, u32, WPARAM, LPARAM) -> LRESULT + 'a,
+            default: fn(HWND, u32, WPARAM, LPARAM) -> LRESULT,
         ) -> LRESULT;
     }
 
-    pub struct StaticWndprocState<T> {
-        window_proc: T,
+    pub struct StaticWndprocState {
+        window_proc: Box<dyn WindowProc>,
         hwnd: Rc<Cell<HWND>>,
         entry_count: Cell<u32>,
         destroy_this: Cell<bool>,
     }
 
-    impl<T> StaticWndprocState<T> {
+    impl StaticWndprocState {
         /// # Safety
         ///
         /// * Caller must ensure that `hwnd` is either valid or null.
@@ -192,9 +192,9 @@ pub mod window_proc {
         ///   processing `WM_NCCREATE`, unless `hwnd` is already non-null.
         /// * Both `static_wndproc` and `static_subclass_wndproc` will
         ///   set it to null while processing `WM_NCDESTROY`.
-        pub unsafe fn new(hwnd: Rc<Cell<HWND>>, window_proc: T) -> Self {
+        pub unsafe fn new<WP: WindowProc + 'static>(hwnd: Rc<Cell<HWND>>, window_proc: WP) -> Self {
             Self {
-                window_proc,
+                window_proc: Box::new(window_proc),
                 hwnd,
                 entry_count: Cell::new(0),
                 destroy_this: Cell::new(false),
@@ -213,24 +213,23 @@ pub mod window_proc {
     /// * Must only be called by the Windows API.
     /// * The Windows API guarantees that it will only call this function in the
     ///   same thread that created the HWND.
-    pub unsafe extern "system" fn static_wndproc<T: WindowProc + 'static>(
+    pub unsafe extern "system" fn static_wndproc(
         handle: HWND,
         message: u32,
         wparam: WPARAM,
         lparam: LPARAM,
     ) -> LRESULT {
         // Get p or immediately return if it's null.
-        let p: *const StaticWndprocState<T>;
+        let p: *const StaticWndprocState;
         if message == WM_NCCREATE {
-            p = (*(lparam.0 as *const CREATESTRUCTW)).lpCreateParams
-                as *const StaticWndprocState<T>;
+            p = (*(lparam.0 as *const CREATESTRUCTW)).lpCreateParams as *const StaticWndprocState;
             SetWindowLongPtrW(handle, GWLP_USERDATA, p as isize);
             // Safety: hwnd never changes once set, except back to null.
             if (*p).hwnd.get() == HWND(0) {
                 (*p).hwnd.set(handle);
             }
         } else {
-            p = GetWindowLongPtrW(handle, GWLP_USERDATA) as *const StaticWndprocState<T>;
+            p = GetWindowLongPtrW(handle, GWLP_USERDATA) as *const StaticWndprocState;
             if p.is_null() {
                 return DefWindowProcW(handle, message, wparam, lparam);
             }
@@ -269,7 +268,7 @@ pub mod window_proc {
 
         // Destroy p if scheduled and we're the last call
         if (*p).entry_count.get() == 0 && (*p).destroy_this.get() {
-            drop(Box::from_raw(p as *mut StaticWndprocState<T>));
+            drop(Box::from_raw(p as *mut StaticWndprocState));
         }
 
         res.unwrap_or(LRESULT(0))
@@ -286,7 +285,7 @@ pub mod window_proc {
     /// * Must only be called by the Windows API.
     /// * The Windows API guarantees that it will only call this function in the
     ///   same thread that created the HWND.
-    pub unsafe extern "system" fn static_subclass_wndproc<T: WindowProc + 'static>(
+    pub unsafe extern "system" fn static_subclass_wndproc(
         handle: HWND,
         message: u32,
         wparam: WPARAM,
@@ -294,7 +293,7 @@ pub mod window_proc {
         _uidsubclass: usize,
         dwrefdata: usize,
     ) -> LRESULT {
-        let p = dwrefdata as *const StaticWndprocState<T>;
+        let p = dwrefdata as *const StaticWndprocState;
 
         // Track recursion depth
         let Some(c) = (*p).entry_count.get().checked_add(1) else {
@@ -320,7 +319,7 @@ pub mod window_proc {
         if message == WM_NCDESTROY || res.is_err() {
             // Schedule p destruction and prevent further calls to wndproc
             (*p).destroy_this.set(true);
-            RemoveWindowSubclass(handle, Some(static_subclass_wndproc::<T>), 0);
+            RemoveWindowSubclass(handle, Some(static_subclass_wndproc), 0);
             (*p).hwnd.set(HWND(0));
         }
 
@@ -329,7 +328,7 @@ pub mod window_proc {
 
         // Destroy p if scheduled and we're the last call
         if (*p).entry_count.get() == 0 && (*p).destroy_this.get() {
-            drop(Box::from_raw(p as *mut StaticWndprocState<T>));
+            drop(Box::from_raw(p as *mut StaticWndprocState));
         }
 
         res.unwrap_or(LRESULT(0))
