@@ -1,6 +1,7 @@
 use std::{error::Error, path::Path, rc::Rc};
 
-fn make<WS: ::trywin::WindowSystem>(ws: &WS) -> Result<WS::Window, WS::Error> {
+#[closure_attr::with_closure]
+fn make<WS: ::trywin::WindowSystem>(ws: WS) -> Result<WS::Window, WS::Error> {
     use ::trywin::*;
 
     let window = ws
@@ -67,31 +68,22 @@ fn make<WS: ::trywin::WindowSystem>(ws: &WS) -> Result<WS::Window, WS::Error> {
         edit: edit.clone(),
     });
 
-    // window.on_close({
-    //     let all = all.clone();
-    //     move || {
-    //         println!("xxxx colors");
-    //         all.color1.destroy().unwrap();
-    //         all.color2.destroy().unwrap();
-    //     }
-    // })?;
-
-    window.on_close({
-        let window = window.clone();
+    window.on_close(
+        #[closure(weak window)]
         move || {
             window.destroy().unwrap();
-        }
-    })?;
+        },
+    )?;
 
-    window.on_destroy({
-        let ws = ws.clone();
-        move || ws.exit_loop().unwrap()
-    })?;
+    window.on_destroy(
+        #[closure(weak ws)]
+        move || ws.exit_loop().unwrap(),
+    )?;
 
     Ok(window)
 }
 
-fn _make2<WS2>(_ws: &WS2)
+fn _make2<WS2>(_ws: WS2)
 where
     WS2: Clone + trywin::WindowSystem,
 {
@@ -101,7 +93,7 @@ where
 fn main() -> Result<(), Box<dyn Error>> {
     use trywin::{comm_ctrl::System, Window, WindowSystem};
 
-    let _w = make(&System)?;
+    let _w = make(System.clone())?;
     // let _w = _w.move_offscreen()?;
     let _w = _w.visible(true)?;
     _w.snapshot()?.save_png(Path::new("snapshot.png"))?;

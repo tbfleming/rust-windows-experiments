@@ -1,3 +1,4 @@
+use closure_attr::Downgrade;
 use std::{fs::File, io::BufWriter, path::Path};
 
 pub mod comm_ctrl;
@@ -34,7 +35,7 @@ pub struct EditOptions {
     pub want_return: bool,
 }
 
-pub trait WindowSystem: Clone + 'static {
+pub trait WindowSystem: Clone + Downgrade + 'static {
     type Error: std::error::Error;
     type Window: Window<Self>;
     type Child: Window<Self>;
@@ -44,7 +45,7 @@ pub trait WindowSystem: Clone + 'static {
     fn exit_loop(&self) -> Result<(), Self::Error>;
 }
 
-pub trait Window<WS: WindowSystem>: Clone + 'static {
+pub trait Window<WS: WindowSystem>: Clone + Downgrade + 'static {
     fn system(&self) -> WS;
     fn destroy(&self) -> Result<(), WS::Error>;
     fn new_child(&self, ty: ChildType) -> Result<WS::Child, WS::Error>;

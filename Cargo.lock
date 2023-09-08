@@ -27,6 +27,35 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "baf1de4339761588bc0619e3cbc0120ee582ebb74b53b4efbf79117bd2da40fd"
 
 [[package]]
+name = "closure_attr"
+version = "0.3.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9f1dfc8ef7971166fb51a198328b26a110ca51b9206e878cf6c3e17fcf31a563"
+dependencies = [
+ "closure_attr_derive",
+]
+
+[[package]]
+name = "closure_attr_core"
+version = "0.3.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "25f153b9cdc9a95101ee052857ea66ee0307a5aa113f14dc28eacfc0201d3646"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn",
+]
+
+[[package]]
+name = "closure_attr_derive"
+version = "0.3.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c9c5f9547e0599aac443a1216731e1e2fd9ee7ca657fced6d3abc5aca66de288"
+dependencies = [
+ "closure_attr_core",
+]
+
+[[package]]
 name = "codexform"
 version = "0.1.0"
 dependencies = [
@@ -157,9 +186,9 @@ checksum = "d66dc143e6b11c1eddc06d5c423cfc97062865baf299914ab64caa38182078fe"
 
 [[package]]
 name = "syn"
-version = "2.0.29"
+version = "2.0.31"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c324c494eba9d92503e6f1ef2e6df781e78f6a7705a0202d9801b198807d518a"
+checksum = "718fa2415bcb8d8bd775917a1bf12a7931b6dfa890753378538118181e0cb398"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -191,6 +220,7 @@ name = "trywin"
 version = "0.1.0"
 dependencies = [
  "bytemuck",
+ "closure_attr",
  "png",
  "thiserror",
  "windows",

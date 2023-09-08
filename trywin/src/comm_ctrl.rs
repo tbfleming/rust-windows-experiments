@@ -1,5 +1,6 @@
 #![allow(clippy::too_many_arguments)]
 
+use closure_attr::{Downgrade, Upgrade};
 use std::{cell::RefCell, mem::size_of, rc::Rc, result::Result};
 use windows::{
     core,
@@ -21,6 +22,20 @@ pub struct System;
 impl System {
     pub fn new() -> Self {
         Self {}
+    }
+}
+
+impl Downgrade for System {
+    type Target = Self;
+    fn downgrade(this: &Self) -> Self::Target {
+        this.clone()
+    }
+}
+
+impl Upgrade for System {
+    type Target = Self;
+    fn upgrade(&self) -> Option<Self::Target> {
+        Some(self.clone())
     }
 }
 
